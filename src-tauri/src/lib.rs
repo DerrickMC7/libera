@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use tauri::State;
 use walkdir::WalkDir;
 use tauri::Manager;
+use zip::ZipArchive;
 
 // Holds the SQLite connection shared across all Tauri commands
 pub struct DbState(pub Mutex<Connection>);
@@ -135,8 +136,8 @@ fn save_books(state: State<DbState>, books: Vec<Book>) -> Result<usize, String> 
 
     for book in &books {
         let result = conn.execute(
-            "INSERT OR IGNORE INTO books (path, title, file_name, format, file_size)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR REPLACE INTO books (path, title, file_name, format, file_size)
+ VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![
                 book.path,
                 book.title,
@@ -334,9 +335,17 @@ fn scan_books(path: String) -> Result<Vec<Book>, String> {
                     .to_string_lossy()
                     .to_string();
                 let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+                // For EPUBs, try to extract the real title
+                let title = if ext == "epub" {
+                    extract_epub_title(&path).unwrap_or_else(|| file_name.clone())
+                } else {
+                    file_name.clone()
+                };
+
                 Some(Book {
                     path: path.to_string_lossy().to_string(),
-                    title: file_name.clone(),
+                    title,
                     file_name,
                     format: ext,
                     file_size,
@@ -348,6 +357,40 @@ fn scan_books(path: String) -> Result<Vec<Book>, String> {
         .collect();
 
     Ok(books)
+}
+
+// Extracts the title from an EPUB's content.opf metadata file
+fn extract_epub_title(path: &PathBuf) -> Option<String> {
+    use std::io::Read;
+    let file = fs::File::open(path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+
+    // Try common locations for content.opf
+    let opf_names = ["OEBPS/content.opf", "content.opf", "OPS/content.opf"];
+    for name in &opf_names {
+        if let Ok(mut opf_file) = archive.by_name(name) {
+            let mut contents = String::new();
+            opf_file.read_to_string(&mut contents).ok()?;
+
+            // Simple regex-free extraction of <dc:title>
+            if let Some(start) = contents.find("<dc:title>") {
+                let rest = &contents[start + 10..];
+                if let Some(end) = rest.find("</dc:title>") {
+                    return Some(rest[..end].trim().to_string());
+                }
+            }
+            // Also try with attributes like <dc:title id="...">
+            if let Some(start) = contents.find("<dc:title") {
+                if let Some(tag_end) = contents[start..].find('>') {
+                    let rest = &contents[start + tag_end + 1..];
+                    if let Some(end) = rest.find("</dc:title>") {
+                        return Some(rest[..end].trim().to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 // Extracts album artwork from an audio file and saves it to cache
@@ -399,6 +442,84 @@ fn md5_simple(input: &str) -> u64 {
     hasher.finish()
 }
 
+// Extracts cover image from an EPUB file and saves it to cache
+#[tauri::command]
+fn get_epub_cover(app: tauri::AppHandle, book_path: String) -> Option<String> {
+    use std::io::Read;
+
+    let path = PathBuf::from(&book_path);
+    let file = fs::File::open(&path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+
+    // Create cache directory
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .ok()?
+        .join("book-covers");
+    fs::create_dir_all(&cache_dir).ok()?;
+
+    let hash = format!("{:x}", md5_simple(&book_path));
+    let cache_path = cache_dir.join(format!("{}.jpg", hash));
+
+    if cache_path.exists() {
+        return Some(cache_path.to_string_lossy().to_string());
+    }
+
+    // Search for cover image inside the EPUB
+    let cover_names = [
+    "cover.jpg", "cover.jpeg", "cover.png",
+    "images/cover.jpg", "images/cover.jpeg", "images/cover.png",
+    "OEBPS/cover.jpg", "OEBPS/cover.jpeg", "OEBPS/cover.png",
+    "OEBPS/images/cover.jpg", "OEBPS/images/cover.jpeg", "OEBPS/images/cover.png",
+    "OEBPS/Images/cover.jpg", "OEBPS/Images/cover.jpeg", "OEBPS/Images/cover.png",
+    "OEBPS/Images/default_cover.jpeg", "OEBPS/Images/default_cover.jpg",
+];
+
+    for name in &cover_names {
+        if let Ok(mut zip_file) = archive.by_name(name) {
+            let mut bytes = Vec::new();
+            zip_file.read_to_end(&mut bytes).ok()?;
+
+            // Resize and optimize using image crate
+            use image::imageops::FilterType;
+            use image::ImageFormat;
+
+            let img = image::load_from_memory(&bytes).ok()?;
+            let img = img.resize(600, 600, FilterType::Lanczos3);
+            let mut output = fs::File::create(&cache_path).ok()?;
+            img.write_to(
+                &mut std::io::BufWriter::new(&mut output),
+                ImageFormat::Jpeg,
+            ).ok()?;
+
+            return Some(cache_path.to_string_lossy().to_string());
+        }
+    }
+
+    None
+}
+
+#[tauri::command]
+fn list_epub_contents(book_path: String) -> Vec<String> {
+    let path = PathBuf::from(&book_path);
+    let file = match fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    let mut archive = match ZipArchive::new(file) {
+        Ok(a) => a,
+        Err(_) => return vec![],
+    };
+    let mut names = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(f) = archive.by_index(i) {
+            names.push(f.name().to_string());
+        }
+    }
+    names
+}
+
 #[tauri::command]
 async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
@@ -437,6 +558,8 @@ pub fn run() {
     save_books,
     get_books,
     get_artwork,
+    get_epub_cover,
+    list_epub_contents,
 ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
