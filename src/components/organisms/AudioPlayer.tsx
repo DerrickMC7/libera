@@ -4,6 +4,8 @@ import { PlayButton } from "../atoms/PlayButton";
 import { SkipButton } from "../atoms/SkipButton";
 import { ProgressBar } from "../atoms/ProgressBar";
 import { VolumeSlider } from "../atoms/VolumeSlider";
+import { ShuffleButton } from "../atoms/ShuffleButton";
+import { RepeatButton } from "../atoms/RepeatButton";
 import { useArtwork } from "../../hooks/useArtwork";
 
 export function AudioPlayer() {
@@ -12,10 +14,14 @@ export function AudioPlayer() {
     currentTrack,
     isPlaying,
     volume,
+    shuffle,
+    repeat,
     setIsPlaying,
     setVolume,
     nextTrack,
     previousTrack,
+    toggleShuffle,
+    toggleRepeat,
   } = usePlayerStore();
 
   const { data: artworkUrl } = useArtwork(currentTrack?.path);
@@ -49,10 +55,12 @@ export function AudioPlayer() {
 
       {/* Controls */}
       <div className="flex flex-col items-center flex-1 gap-2">
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-5">
+          <ShuffleButton active={shuffle} onClick={toggleShuffle} />
           <SkipButton direction="previous" onClick={previousTrack} />
           <PlayButton isPlaying={isPlaying} onClick={() => setIsPlaying(!isPlaying)} />
           <SkipButton direction="next" onClick={nextTrack} />
+          <RepeatButton mode={repeat} onClick={toggleRepeat} />
         </div>
         <ProgressBar progress={progress} duration={duration} onSeek={seek} />
       </div>
