@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
 use walkdir::WalkDir;
+use tauri::Manager;
 
 // Holds the SQLite connection shared across all Tauri commands
 pub struct DbState(pub Mutex<Connection>);
@@ -349,6 +350,54 @@ fn scan_books(path: String) -> Result<Vec<Book>, String> {
     Ok(books)
 }
 
+// Extracts album artwork from an audio file and saves it to cache
+// Returns the path to the cached image, or None if no artwork found
+#[tauri::command]
+fn get_artwork(app: tauri::AppHandle, track_path: String) -> Option<String> {
+    use image::imageops::FilterType;
+    use image::ImageFormat;
+
+    let path = PathBuf::from(&track_path);
+    let tagged_file = Probe::open(&path).ok()?.read().ok()?;
+    let tag = tagged_file.primary_tag()?;
+
+    let picture = tag.pictures().first()?;
+    let image_data = picture.data();
+
+    // Create cache directory
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .ok()?
+        .join("artwork");
+    fs::create_dir_all(&cache_dir).ok()?;
+
+    let hash = format!("{:x}", md5_simple(&track_path));
+    let cache_path = cache_dir.join(format!("{}.jpg", hash));
+
+    // Only process if not already cached
+    if !cache_path.exists() {
+        // Load image from bytes
+        let img = image::load_from_memory(image_data).ok()?;
+
+        // Resize to max 600x600 keeping aspect ratio
+        let img = img.resize(600, 600, FilterType::Lanczos3);
+
+        // Save as JPEG with quality 88 — minimal loss, significant size reduction
+        let mut output = fs::File::create(&cache_path).ok()?;
+        img.write_to(&mut std::io::BufWriter::new(&mut output), ImageFormat::Jpeg).ok()?;
+    }
+
+    Some(cache_path.to_string_lossy().to_string())
+}
+
+fn md5_simple(input: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    input.hash(&mut hasher);
+    hasher.finish()
+}
 
 #[tauri::command]
 async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
@@ -387,6 +436,7 @@ pub fn run() {
     scan_books,
     save_books,
     get_books,
+    get_artwork,
 ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
