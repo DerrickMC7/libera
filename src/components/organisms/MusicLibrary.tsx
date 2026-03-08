@@ -1,20 +1,14 @@
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-opener";
 import { useLibrary, useScanFolder } from "../../hooks/useLibrary";
 import { usePlayerStore } from "../../store/playerStore";
 import { Button } from "../atoms/Button";
+import { TrackRow } from "../molecules/TrackRow";
 import { Track } from "../../types/track";
-
-function formatDuration(secs: number): string {
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
 
 export function MusicLibrary() {
   const { data: tracks = [], isLoading } = useLibrary();
   const { mutate: scanFolder, isPending } = useScanFolder();
-  const { setQueue, setIsPlaying } = usePlayerStore();
+  const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
   const [search, setSearch] = useState("");
 
   const filtered = tracks.filter(
@@ -24,13 +18,21 @@ export function MusicLibrary() {
       t.album.toLowerCase().includes(search.toLowerCase())
   );
 
-async function handleScan() {
-  const { invoke } = await import("@tauri-apps/api/core");
-  const selected = await invoke<string | null>("pick_folder");
-  if (selected) {
-    scanFolder(selected);
+  async function handleScan() {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Select music folder",
+      });
+      if (selected && typeof selected === "string") {
+        scanFolder(selected);
+      }
+    } catch (e) {
+      console.error("Dialog error:", e);
+    }
   }
-}
 
   function handlePlay(track: Track, index: number) {
     setQueue(filtered, index);
@@ -46,8 +48,12 @@ async function handleScan() {
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-1.5">
               Your Collection
             </p>
-            <h1 className="font-serif text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2]">
-              Music <em className="italic text-[#c8bfa8] font-light">library</em>
+            <h1
+              className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+              style={{ fontFamily: "Fraunces, serif" }}
+            >
+              Music{" "}
+              <em className="italic text-[#c8bfa8] font-light">library</em>
             </h1>
           </div>
           <Button variant="primary" onClick={handleScan} disabled={isPending}>
@@ -91,29 +97,13 @@ async function handleScan() {
         )}
 
         {filtered.map((track, index) => (
-          <div
+          <TrackRow
             key={track.path}
+            track={track}
+            index={index}
+            isActive={currentTrack?.path === track.path}
             onClick={() => handlePlay(track, index)}
-            className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 py-3 rounded-lg cursor-pointer hover:bg-[#1f1d18] group transition-colors"
-          >
-            <div className="min-w-0">
-              <p className="text-sm text-[#f0ead8] truncate">{track.title}</p>
-              {track.track_number && (
-                <p className="text-xs text-[#3a3628] mt-0.5">
-                  #{track.track_number}
-                </p>
-              )}
-            </div>
-            <p className="text-sm text-[#7a7060] truncate self-center">
-              {track.artist}
-            </p>
-            <p className="text-sm text-[#7a7060] truncate self-center">
-              {track.album}
-            </p>
-            <p className="text-sm text-[#7a7060] text-right self-center font-mono">
-              {formatDuration(track.duration_secs)}
-            </p>
-          </div>
+          />
         ))}
       </div>
     </div>
