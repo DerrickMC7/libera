@@ -1,9 +1,121 @@
 use lofty::prelude::*;
 use lofty::probe::Probe;
 use rayon::prelude::*;
+use rusqlite::{Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::State;
+
+// Holds the SQLite connection shared across all Tauri commands
+pub struct DbState(pub Mutex<Connection>);
+
+// Creates the SQLite database and tables if they don't exist
+fn initialize_database(conn: &Connection) -> SqlResult<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tracks (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            path            TEXT NOT NULL UNIQUE,
+            title           TEXT NOT NULL,
+            artist          TEXT NOT NULL,
+            album           TEXT NOT NULL,
+            album_artist    TEXT NOT NULL,
+            genre           TEXT NOT NULL,
+            year            INTEGER,
+            track_number    INTEGER,
+            track_total     INTEGER,
+            disc_number     INTEGER,
+            disc_total      INTEGER,
+            duration_secs   INTEGER NOT NULL,
+            bitrate         INTEGER,
+            sample_rate     INTEGER,
+            channels        INTEGER,
+            file_size       INTEGER NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
+// Tauri command — saves scanned tracks to the database
+#[tauri::command]
+fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, String> {
+    let conn = state.0.lock().map_err(|e| format!("Database lock error: {}", e))?;
+    
+    let mut saved = 0;
+
+    for track in &tracks {
+        let result = conn.execute(
+            "INSERT OR IGNORE INTO tracks 
+                (path, title, artist, album, album_artist, genre, year, 
+                track_number, track_total, disc_number, disc_total, 
+                duration_secs, bitrate, sample_rate, channels, file_size)
+            VALUES 
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            rusqlite::params![
+                track.path,
+                track.title,
+                track.artist,
+                track.album,
+                track.album_artist,
+                track.genre,
+                track.year,
+                track.track_number,
+                track.track_total,
+                track.disc_number,
+                track.disc_total,
+                track.duration_secs,
+                track.bitrate,
+                track.sample_rate,
+                track.channels,
+                track.file_size,
+            ],
+        );
+
+        if result.is_ok() {
+            saved += 1;
+        }
+    }
+
+    Ok(saved)
+}
+
+// Tauri command — returns all tracks stored in the database
+#[tauri::command]
+fn get_tracks(state: State<DbState>) -> Result<Vec<Track>, String> {
+    let conn = state.0.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    let mut stmt = conn
+        .prepare("SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size FROM tracks")
+        .map_err(|e| format!("Query error: {}", e))?;
+
+    let tracks = stmt
+        .query_map([], |row| {
+            Ok(Track {
+                path: row.get(0)?,
+                title: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                album_artist: row.get(4)?,
+                genre: row.get(5)?,
+                year: row.get(6)?,
+                track_number: row.get(7)?,
+                track_total: row.get(8)?,
+                disc_number: row.get(9)?,
+                disc_total: row.get(10)?,
+                duration_secs: row.get(11)?,
+                bitrate: row.get(12)?,
+                sample_rate: row.get(13)?,
+                channels: row.get(14)?,
+                file_size: row.get(15)?,
+            })
+        })
+        .map_err(|e| format!("Query error: {}", e))?
+        .filter_map(|t| t.ok())
+        .collect();
+
+    Ok(tracks)
+}
 
 // Represents a single audio track in the library
 #[derive(Serialize, Deserialize, Debug)]
@@ -129,9 +241,28 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Open or create the SQLite database file in the app data directory
+    let db_path = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("libera")
+        .join("libera.db");
+
+    // Create the libera directory if it doesn't exist
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).expect("Failed to create database directory");
+    }
+
+    let conn = Connection::open(&db_path).expect("Failed to open database");
+    initialize_database(&conn).expect("Failed to initialize database");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![scan_folder])
+        .manage(DbState(Mutex::new(conn)))
+        .invoke_handler(tauri::generate_handler![
+            scan_folder,
+            save_tracks,
+            get_tracks,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
