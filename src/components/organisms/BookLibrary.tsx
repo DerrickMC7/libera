@@ -2,12 +2,15 @@ import { useState } from "react";
 import { useBooks, useScanBooks } from "../../hooks/useBooks";
 import { Button } from "../atoms/Button";
 import { BookRow } from "../molecules/BookRow";
+import { PdfViewer } from "./PdfViewer";
+import { EpubViewer } from "./EpubViewer";
 import { Book } from "../../types/book";
 
 export function BookLibrary() {
   const { data: books = [], isLoading } = useBooks();
   const { mutate: scanBooks, isPending } = useScanBooks();
   const [search, setSearch] = useState("");
+  const [selectedBook, setSelectedBook] = useState<Book | null>(null);
 
   const filtered = books.filter((b) =>
     b.title.toLowerCase().includes(search.toLowerCase())
@@ -29,9 +32,22 @@ export function BookLibrary() {
     }
   }
 
-  function handleOpen(book: Book) {
-    // Opening books will be implemented in a future version
-    console.log("Open book:", book.path);
+  if (selectedBook?.format === "pdf") {
+    return (
+      <PdfViewer
+        book={selectedBook}
+        onClose={() => setSelectedBook(null)}
+      />
+    );
+  }
+
+  if (selectedBook?.format === "epub") {
+    return (
+      <EpubViewer
+        book={selectedBook}
+        onClose={() => setSelectedBook(null)}
+      />
+    );
   }
 
   return (
@@ -94,7 +110,7 @@ export function BookLibrary() {
             key={book.path}
             book={book}
             index={index}
-            onClick={() => handleOpen(book)}
+            onClick={() => setSelectedBook(book)}
           />
         ))}
       </div>
