@@ -27,8 +27,14 @@ export function useAudioPlayer() {
     });
 
     audioRef.current.addEventListener("ended", () => {
-      nextTrack();
-    });
+  const { repeat, nextTrack } = usePlayerStore.getState();
+  if (repeat === "one" && audioRef.current) {
+    audioRef.current.currentTime = 0;
+    audioRef.current.play();
+  } else {
+    nextTrack();
+  }
+});
 
     return () => {
       audioRef.current?.pause();
