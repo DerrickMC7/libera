@@ -239,6 +239,16 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
     })
 }
 
+
+#[tauri::command]
+async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .blocking_pick_folder()
+        .map(|p| p.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Open or create the SQLite database file in the app data directory
@@ -255,14 +265,16 @@ pub fn run() {
     let conn = Connection::open(&db_path).expect("Failed to open database");
     initialize_database(&conn).expect("Failed to initialize database");
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .manage(DbState(Mutex::new(conn)))
-        .invoke_handler(tauri::generate_handler![
-            scan_folder,
-            save_tracks,
-            get_tracks,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+   tauri::Builder::default()
+    .plugin(tauri_plugin_opener::init())
+    .plugin(tauri_plugin_dialog::init())
+    .manage(DbState(Mutex::new(conn)))
+    .invoke_handler(tauri::generate_handler![
+    scan_folder,
+    save_tracks,
+    get_tracks,
+    pick_folder,
+])
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
 }
