@@ -27,3 +27,4 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 rayon = "1.10"
 dirs = "5"
 tauri-plugin-dialog = "2"
+walkdir = "2"

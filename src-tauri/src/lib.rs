@@ -7,6 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
+use walkdir::WalkDir;
 
 // Holds the SQLite connection shared across all Tauri commands
 pub struct DbState(pub Mutex<Connection>);
@@ -32,6 +33,14 @@ fn initialize_database(conn: &Connection) -> SqlResult<()> {
             sample_rate     INTEGER,
             channels        INTEGER,
             file_size       INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS books (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            path        TEXT NOT NULL UNIQUE,
+            title       TEXT NOT NULL,
+            file_name   TEXT NOT NULL,
+            format      TEXT NOT NULL,
+            file_size   INTEGER NOT NULL
         );",
     )?;
     Ok(())
@@ -117,6 +126,58 @@ fn get_tracks(state: State<DbState>) -> Result<Vec<Track>, String> {
     Ok(tracks)
 }
 
+// Tauri command — saves scanned books to the database
+#[tauri::command]
+fn save_books(state: State<DbState>, books: Vec<Book>) -> Result<usize, String> {
+    let conn = state.0.lock().map_err(|e| format!("Database lock error: {}", e))?;
+    let mut saved = 0;
+
+    for book in &books {
+        let result = conn.execute(
+            "INSERT OR IGNORE INTO books (path, title, file_name, format, file_size)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                book.path,
+                book.title,
+                book.file_name,
+                book.format,
+                book.file_size,
+            ],
+        );
+        if result.is_ok() {
+            saved += 1;
+        }
+    }
+
+    Ok(saved)
+}
+
+// Tauri command — returns all books stored in the database
+#[tauri::command]
+fn get_books(state: State<DbState>) -> Result<Vec<Book>, String> {
+    let conn = state.0.lock().map_err(|e| format!("Database lock error: {}", e))?;
+
+    let mut stmt = conn
+        .prepare("SELECT path, title, file_name, format, file_size FROM books")
+        .map_err(|e| format!("Query error: {}", e))?;
+
+    let books = stmt
+        .query_map([], |row| {
+            Ok(Book {
+                path: row.get(0)?,
+                title: row.get(1)?,
+                file_name: row.get(2)?,
+                format: row.get(3)?,
+                file_size: row.get(4)?,
+            })
+        })
+        .map_err(|e| format!("Query error: {}", e))?
+        .filter_map(|b| b.ok())
+        .collect();
+
+    Ok(books)
+}
+
 // Represents a single audio track in the library
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Track {
@@ -135,6 +196,16 @@ pub struct Track {
     pub bitrate: Option<u32>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u8>,
+    pub file_size: u64,
+}
+
+// Represents a single book in the library
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Book {
+    pub path: String,
+    pub title: String,
+    pub file_name: String,
+    pub format: String, // "pdf" or "epub"
     pub file_size: u64,
 }
 
@@ -239,6 +310,45 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
     })
 }
 
+// Tauri command — scans a folder recursively for PDF and EPUB files
+#[tauri::command]
+fn scan_books(path: String) -> Result<Vec<Book>, String> {
+    let folder = PathBuf::from(&path);
+
+    if !folder.exists() {
+        return Err(format!("Folder not found: {}", path));
+    }
+
+    let books: Vec<Book> = WalkDir::new(&folder)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            let path = entry.path().to_path_buf();
+            let ext = path.extension()?.to_str()?.to_lowercase();
+            if ext == "pdf" || ext == "epub" {
+                let file_name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                Some(Book {
+                    path: path.to_string_lossy().to_string(),
+                    title: file_name.clone(),
+                    file_name,
+                    format: ext,
+                    file_size,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(books)
+}
+
 
 #[tauri::command]
 async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
@@ -269,11 +379,14 @@ pub fn run() {
     .plugin(tauri_plugin_opener::init())
     .plugin(tauri_plugin_dialog::init())
     .manage(DbState(Mutex::new(conn)))
-    .invoke_handler(tauri::generate_handler![
+.invoke_handler(tauri::generate_handler![
     scan_folder,
     save_tracks,
     get_tracks,
     pick_folder,
+    scan_books,
+    save_books,
+    get_books,
 ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
