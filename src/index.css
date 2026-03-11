@@ -1,1 +1,11 @@
 @import "tailwindcss";
+@import "pdfjs-dist/web/pdf_viewer.css";
+
+.textLayer ::selection {
+  background: rgba(212, 135, 42, 0.4);
+}
+
+.textLayer .highlight {
+  background: rgba(212, 135, 42, 0.35);
+  border-radius: 2px;
+}
