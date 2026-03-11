@@ -11,6 +11,7 @@ use walkdir::WalkDir;
 use tauri::Manager;
 use zip::ZipArchive;
 
+
 // Holds the SQLite connection shared across all Tauri commands
 pub struct DbState(pub Mutex<Connection>);
 
@@ -521,6 +522,30 @@ fn list_epub_contents(book_path: String) -> Vec<String> {
 }
 
 #[tauri::command]
+fn open_pdf_viewer(app: tauri::AppHandle, path: String, title: String) -> Result<(), String> {
+    let encoded_path = urlencoding::encode(&path).to_string();
+    let encoded_title = urlencoding::encode(&title).to_string();
+
+    let url_path = format!(
+        "pdf-viewer.html?path={}&title={}",
+        encoded_path, encoded_title
+    );
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "pdf-viewer",
+        tauri::WebviewUrl::App(url_path.into()),
+    )
+    .title(&title)
+    .inner_size(1100.0, 850.0)
+    .resizable(true)
+    .build()
+    .map_err(|e: tauri::Error| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
     app.dialog()
@@ -560,6 +585,7 @@ pub fn run() {
     get_artwork,
     get_epub_cover,
     list_epub_contents,
+    open_pdf_viewer,
 ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
