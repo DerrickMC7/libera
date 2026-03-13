@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useBooks, useScanBooks } from "../../hooks/useBooks";
 import { Button } from "../atoms/Button";
 import { BookRow } from "../molecules/BookRow";
-import { PdfViewer } from "./PdfViewer";
+import { PdfReader } from "./PdfReader/PdfReader";
 import { EpubViewer } from "./EpubViewer";
 import { Book } from "../../types/book";
 
@@ -34,7 +34,7 @@ export function BookLibrary() {
 
   if (selectedBook?.format === "pdf") {
     return (
-      <PdfViewer
+      <PdfReader
         book={selectedBook}
         onClose={() => setSelectedBook(null)}
       />
