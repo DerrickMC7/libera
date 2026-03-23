@@ -54,8 +54,10 @@ fn initialize_database(conn: &Connection) -> SqlResult<()> {
 fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, String> {
     let conn = state.0.lock().map_err(|e| format!("Database lock error: {}", e))?;
     
+    // Single transaction for all inserts — much faster for large libraries
+    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+    
     let mut saved = 0;
-
     for track in &tracks {
         let result = conn.execute(
             "INSERT OR IGNORE INTO tracks 
@@ -65,30 +67,17 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
             VALUES 
                 (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
-                track.path,
-                track.title,
-                track.artist,
-                track.album,
-                track.album_artist,
-                track.genre,
-                track.year,
-                track.track_number,
-                track.track_total,
-                track.disc_number,
-                track.disc_total,
-                track.duration_secs,
-                track.bitrate,
-                track.sample_rate,
-                track.channels,
-                track.file_size,
+                track.path, track.title, track.artist, track.album,
+                track.album_artist, track.genre, track.year,
+                track.track_number, track.track_total, track.disc_number,
+                track.disc_total, track.duration_secs, track.bitrate,
+                track.sample_rate, track.channels, track.file_size,
             ],
         );
-
-        if result.is_ok() {
-            saved += 1;
-        }
+        if result.is_ok() { saved += 1; }
     }
-
+    
+    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
     Ok(saved)
 }
 
@@ -222,16 +211,15 @@ fn scan_folder(path: String) -> Result<Vec<Track>, String> {
         return Err(format!("Folder not found: {}", path));
     }
 
-    let entries = fs::read_dir(&folder)
-        .map_err(|e| format!("Error reading folder: {}", e))?;
-
-    // Filter only .mp3 and .flac files
-    let audio_files: Vec<PathBuf> = entries
+    // Recursive scan with WalkDir
+    let audio_files: Vec<PathBuf> = WalkDir::new(&folder)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
         .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
+            let path = entry.path().to_path_buf();
             let ext = path.extension()?.to_str()?.to_lowercase();
-            if ext == "mp3" || ext == "flac" {
+            if ext == "mp3" || ext == "flac" || ext == "wav" || ext == "aac" || ext == "ogg" {
                 Some(path)
             } else {
                 None
@@ -239,11 +227,18 @@ fn scan_folder(path: String) -> Result<Vec<Track>, String> {
         })
         .collect();
 
-    // Process files in parallel using Rayon
-    let tracks: Vec<Track> = audio_files
-        .par_iter()
-        .filter_map(|file_path| read_track_metadata(file_path))
-        .collect();
+    // Limit Rayon parallelism to avoid thread explosion
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let tracks = pool.install(|| {
+        audio_files
+            .par_iter()
+            .filter_map(|file_path| read_track_metadata(file_path))
+            .collect::<Vec<Track>>()
+    });
 
     Ok(tracks)
 }
