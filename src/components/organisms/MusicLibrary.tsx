@@ -1,13 +1,17 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { VirtualItem } from "@tanstack/react-virtual";
-import { useLibrary, useScanFolder } from "../../hooks/useLibrary";
+import { useQueryClient } from "@tanstack/react-query";
+import { useTracksCount, useScanFolder, PAGE_SIZE } from "../../hooks/useLibrary";
 import { usePlayerStore } from "../../store/playerStore";
 import { Button } from "../atoms/Button";
 import { TrackRow } from "../molecules/TrackRow";
 import { Track } from "../../types/track";
+import { invoke } from "@tauri-apps/api/core";
 
 const SKELETON_EXTRA = 20;
+const MAX_PAGES_IN_MEMORY = 6;
+const MAX_CONCURRENT_LOADS = 2;
 
 function SkeletonRow({ opacity }: { opacity: number }) {
   return (
@@ -36,25 +40,118 @@ function SkeletonRow({ opacity }: { opacity: number }) {
 }
 
 export function MusicLibrary() {
-  const { data: tracks = [], isLoading } = useLibrary();
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const pagesRef = useRef<Map<number, Track[]>>(new Map());
+  const pageOrderRef = useRef<number[]>([]);
+  const loadingRef = useRef<Set<number>>(new Set());
+  const activeLoadsRef = useRef(0);
+  const isScrollingRef = useRef(false);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [tick, setTick] = useState(0);
+  const forceUpdate = useCallback(() => setTick((t) => t + 1), []);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
   const { mutate: scanFolder, isPending } = useScanFolder();
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
-  const [search, setSearch] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
 
-  const filtered = tracks.filter(
-    (t) =>
-      t.title.toLowerCase().includes(search.toLowerCase()) ||
-      t.artist.toLowerCase().includes(search.toLowerCase()) ||
-      t.album.toLowerCase().includes(search.toLowerCase())
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (search !== debouncedSearch) {
+        setDebouncedSearch(search);
+        pagesRef.current.clear();
+        pageOrderRef.current = [];
+        loadingRef.current.clear();
+        activeLoadsRef.current = 0;
+        forceUpdate();
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { data: totalCount = 0 } = useTracksCount(debouncedSearch);
+
+  const evictOldPages = useCallback((keepPages: number[]) => {
+    if (pagesRef.current.size <= MAX_PAGES_IN_MEMORY) return;
+    const toEvict = pageOrderRef.current
+      .filter((p) => !keepPages.includes(p))
+      .slice(0, pagesRef.current.size - MAX_PAGES_IN_MEMORY);
+    toEvict.forEach((p) => {
+      pagesRef.current.delete(p);
+      pageOrderRef.current = pageOrderRef.current.filter((x) => x !== p);
+    });
+  }, []);
+
+  const loadPage = useCallback(
+    async (pageIndex: number, visiblePages: number[]) => {
+      if (pagesRef.current.has(pageIndex)) return;
+      if (loadingRef.current.has(pageIndex)) return;
+      if (activeLoadsRef.current >= MAX_CONCURRENT_LOADS) return;
+
+      loadingRef.current.add(pageIndex);
+      activeLoadsRef.current++;
+      const offset = pageIndex * PAGE_SIZE;
+      try {
+        const tracks = await queryClient.fetchQuery({
+          queryKey: ["tracks-page", debouncedSearch, offset],
+          queryFn: () =>
+            invoke<Track[]>("get_tracks_page", {
+              query: debouncedSearch,
+              limit: PAGE_SIZE,
+              offset,
+            }),
+          staleTime: 1000 * 60 * 5,
+        });
+        pagesRef.current.set(pageIndex, tracks);
+        pageOrderRef.current = pageOrderRef.current.filter((p) => p !== pageIndex);
+        pageOrderRef.current.push(pageIndex);
+        evictOldPages(visiblePages);
+        forceUpdate();
+      } catch (e) {
+        console.error("Failed to load page", pageIndex, e);
+      } finally {
+        loadingRef.current.delete(pageIndex);
+        activeLoadsRef.current--;
+      }
+    },
+    [debouncedSearch, queryClient, forceUpdate, evictOldPages]
   );
 
+  function getTrack(index: number): Track | null {
+    const pageIndex = Math.floor(index / PAGE_SIZE);
+    const pageOffset = index % PAGE_SIZE;
+    return pagesRef.current.get(pageIndex)?.[pageOffset] ?? null;
+  }
+
   const virtualizer = useVirtualizer({
-    count: filtered.length + SKELETON_EXTRA,
+    count: totalCount + SKELETON_EXTRA,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 52,
-    overscan: 50,
+    overscan: 20,
   });
+
+  const loadVisiblePages = useCallback(() => {
+    const items = virtualizer.getVirtualItems();
+    if (items.length === 0 || totalCount === 0) return;
+    const firstVisible = items[0].index;
+    const lastVisible = items[items.length - 1].index;
+    const firstPage = Math.floor(Math.max(0, firstVisible) / PAGE_SIZE);
+    const lastPage = Math.floor(Math.min(lastVisible, totalCount - 1) / PAGE_SIZE);
+    const visiblePages: number[] = [];
+    for (let p = firstPage; p <= lastPage + 1; p++) {
+      visiblePages.push(p);
+    }
+    visiblePages.forEach((p) => loadPage(p, visiblePages));
+  }, [virtualizer, totalCount, loadPage]);
+
+  useEffect(() => {
+    if (totalCount > 0) loadPage(0, [0]);
+  }, [totalCount, debouncedSearch]);
+
+  useEffect(() => {
+    loadVisiblePages();
+  }, [tick]);
 
   async function handleScan() {
     const { open } = await import("@tauri-apps/plugin-dialog");
@@ -72,14 +169,28 @@ export function MusicLibrary() {
     }
   }
 
-  function handlePlay(track: Track, index: number) {
-    setQueue(filtered, index);
+  function handlePlay(index: number) {
+    const track = getTrack(index);
+    if (!track) return;
+    const allLoaded: Track[] = [];
+    Array.from(pagesRef.current.entries())
+      .sort(([a], [b]) => a - b)
+      .forEach(([, tracks]) => allLoaded.push(...tracks));
+    setQueue(allLoaded, allLoaded.indexOf(track));
     setIsPlaying(true);
+  }
+
+  function handleScroll() {
+    isScrollingRef.current = true;
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    scrollTimerRef.current = setTimeout(() => {
+      isScrollingRef.current = false;
+    }, 150);
+    loadVisiblePages();
   }
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
-      {/* Header */}
       <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
         <div className="flex items-end justify-between mb-7">
           <div>
@@ -99,7 +210,6 @@ export function MusicLibrary() {
           </Button>
         </div>
 
-        {/* Search */}
         <input
           type="text"
           placeholder="Search tracks, artists, albums..."
@@ -108,7 +218,6 @@ export function MusicLibrary() {
           className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 mb-6 transition-colors"
         />
 
-        {/* Column headers */}
         <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
           <span>Title</span>
           <span>Artist</span>
@@ -117,11 +226,12 @@ export function MusicLibrary() {
         </div>
       </div>
 
-      {/* Track list — virtualized */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-10 py-4">
-
-        {/* Empty state */}
-        {!isLoading && !isPending && tracks.length === 0 && (
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto px-10 py-4"
+        onScroll={handleScroll}
+      >
+        {!isPending && totalCount === 0 && (
           <div className="flex flex-col items-center justify-center mt-32 gap-3">
             <p className="text-[#3a3628] text-sm">Your library is empty</p>
             <p className="text-[#3a3628] text-xs">
@@ -130,19 +240,19 @@ export function MusicLibrary() {
           </div>
         )}
 
-        {/* Virtualized track list — always rendered when tracks exist */}
-        {(filtered.length > 0 || isLoading) && (
+        {totalCount > 0 && (
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
             {virtualizer.getVirtualItems().map((virtualItem: VirtualItem) => {
-              const isSkeleton = virtualItem.index >= filtered.length;
-              const track = isSkeleton ? null : filtered[virtualItem.index];
-              const skeletonOpacity = isSkeleton
-                ? Math.max(0, 1 - (virtualItem.index - filtered.length) * 0.1)
+              const index = virtualItem.index;
+              const track = getTrack(index);
+              const isSkeleton = index >= totalCount || !track;
+              const skeletonOpacity = index >= totalCount
+                ? Math.max(0, 1 - (index - totalCount) * 0.08)
                 : 1;
 
               return (
                 <div
-                  key={virtualItem.index}
+                  key={virtualItem.key}
                   style={{
                     position: "absolute",
                     top: 0,
@@ -155,10 +265,11 @@ export function MusicLibrary() {
                     <SkeletonRow opacity={skeletonOpacity} />
                   ) : (
                     <TrackRow
-                      track={track!}
-                      index={virtualItem.index}
-                      isActive={currentTrack?.path === track!.path}
-                      onClick={() => handlePlay(track!, virtualItem.index)}
+                      track={track}
+                      index={index}
+                      isActive={currentTrack?.path === track.path}
+                      isScrolling={isScrollingRef.current}
+                      onClick={() => handlePlay(index)}
                     />
                   )}
                 </div>
