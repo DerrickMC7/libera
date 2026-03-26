@@ -2,14 +2,29 @@ import { invoke } from "@tauri-apps/api/core";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Track } from "../types/track";
 
-// Fetches all tracks stored in the database
-export function useLibrary() {
+export const PAGE_SIZE = 100;
+
+// Returns total track count for a given search query
+export function useTracksCount(search: string = "") {
   return useQuery({
-    queryKey: ["tracks"],
-    queryFn: async () => {
-      const tracks = await invoke<Track[]>("get_tracks");
-      return tracks;
-    },
+    queryKey: ["tracks-count", search],
+    queryFn: () => invoke<number>("get_tracks_count", { query: search }),
+    staleTime: 1000 * 60 * 5,
+  });
+}
+
+// Fetches a specific page by offset — each page is cached independently
+export function useTracksPage(search: string, offset: number, enabled = true) {
+  return useQuery({
+    queryKey: ["tracks-page", search, offset],
+    queryFn: () =>
+      invoke<Track[]>("get_tracks_page", {
+        query: search,
+        limit: PAGE_SIZE,
+        offset,
+      }),
+    staleTime: 1000 * 60 * 5,
+    enabled,
   });
 }
 
@@ -19,15 +34,13 @@ export function useScanFolder() {
 
   return useMutation({
     mutationFn: async (folderPath: string) => {
-      // Step 1: scan the folder and get tracks
       const tracks = await invoke<Track[]>("scan_folder", { path: folderPath });
-      // Step 2: save them to the database
       const saved = await invoke<number>("save_tracks", { tracks });
       return { tracks, saved };
     },
-    // After a successful scan, refresh the library automatically
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tracks"] });
+      queryClient.invalidateQueries({ queryKey: ["tracks-page"] });
+      queryClient.invalidateQueries({ queryKey: ["tracks-count"] });
     },
   });
 }

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useLibrary } from "../hooks/useLibrary";
+import { useState, useEffect } from "react";
+import { useTracksCount, useTracksPage } from "../hooks/useLibrary";
 import { useBooks } from "../hooks/useBooks";
 import { usePlayerStore } from "../store/playerStore";
 import { TrackRow } from "../components/molecules/TrackRow";
@@ -8,29 +8,26 @@ import { Track } from "../types/track";
 
 export function SearchPage() {
   const [query, setQuery] = useState("");
-  const { data: tracks = [] } = useLibrary();
-  const { data: books = [] } = useBooks();
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
+  const { data: books = [] } = useBooks();
 
-  const q = query.toLowerCase();
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(t);
+  }, [query]);
 
-  const filteredTracks = query
-    ? tracks.filter(
-        (t) =>
-          t.title.toLowerCase().includes(q) ||
-          t.artist.toLowerCase().includes(q) ||
-          t.album.toLowerCase().includes(q)
-      )
+  const { data: trackCount = 0 } = useTracksCount(debouncedQuery);
+  const { data: tracks = [] } = useTracksPage(debouncedQuery, 0, !!debouncedQuery);
+
+  const filteredBooks = debouncedQuery
+    ? books.filter((b) => b.title.toLowerCase().includes(debouncedQuery.toLowerCase()))
     : [];
 
-  const filteredBooks = query
-    ? books.filter((b) => b.title.toLowerCase().includes(q))
-    : [];
-
-  const hasResults = filteredTracks.length > 0 || filteredBooks.length > 0;
+  const hasResults = tracks.length > 0 || filteredBooks.length > 0;
 
   function handlePlayTrack(track: Track, index: number) {
-    setQueue(filteredTracks, index);
+    setQueue(tracks, index);
     setIsPlaying(true);
   }
 
@@ -75,10 +72,10 @@ export function SearchPage() {
         )}
 
         {/* Tracks section */}
-        {filteredTracks.length > 0 && (
+        {tracks.length > 0 && (
           <div className="mb-8">
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#3a3628] mb-3 px-4">
-              Music — {filteredTracks.length} results
+              Music — {trackCount} results
             </p>
             <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628] mb-1">
               <span>Title</span>
@@ -86,7 +83,7 @@ export function SearchPage() {
               <span>Album</span>
               <span className="text-right">Time</span>
             </div>
-            {filteredTracks.map((track, index) => (
+            {tracks.map((track, index) => (
               <TrackRow
                 key={track.path}
                 track={track}

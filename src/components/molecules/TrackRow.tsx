@@ -6,6 +6,7 @@ interface TrackRowProps {
   track: Track;
   index: number;
   isActive: boolean;
+  isScrolling?: boolean;
   onClick: () => void;
 }
 
@@ -15,25 +16,21 @@ function formatDuration(secs: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-export function TrackRow({ track, index, isActive, onClick }: TrackRowProps) {
-  const { data: artworkUrl } = useArtwork(track.path);
+export function TrackRow({ track, index, isActive, isScrolling, onClick }: TrackRowProps) {
+  const { data: artworkUrl } = useArtwork(isScrolling ? undefined : track.path);
 
   return (
     <motion.div
       onClick={onClick}
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.15, delay: index * 0.02 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.12 }}
       className={`
         grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 py-3 rounded-lg cursor-pointer transition-colors
-        ${isActive
-          ? "bg-[rgba(212,135,42,0.08)]"
-          : "hover:bg-[#1f1d18]"
-        }
+        ${isActive ? "bg-[rgba(212,135,42,0.08)]" : "hover:bg-[#1f1d18]"}
       `}
     >
       <div className="min-w-0 flex items-center gap-3">
-        {/* Artwork thumbnail */}
         <div className="w-8 h-8 rounded bg-[#2a2820] shrink-0 overflow-hidden">
           {artworkUrl ? (
             <img
