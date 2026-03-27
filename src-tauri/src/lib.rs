@@ -431,17 +431,14 @@ fn extract_epub_title(path: &PathBuf) -> Option<String> {
 #[tauri::command]
 fn get_artwork(app: tauri::AppHandle, track_path: String) -> Option<String> {
     use image::imageops::FilterType;
-    let path = PathBuf::from(&track_path);
-    let tagged_file = Probe::open(&path).ok()?.read().ok()?;
-    let tag = tagged_file.primary_tag()?;
-    let picture = tag.pictures().first()?;
-    let image_data = picture.data();
     let cache_dir = app.path().app_cache_dir().ok()?.join("artwork");
     fs::create_dir_all(&cache_dir).ok()?;
     let hash = format!("{:x}", md5_simple(&track_path));
     let cache_path = cache_dir.join(format!("{}.jpg", hash));
     if !cache_path.exists() {
-        let img = image::load_from_memory(image_data).ok()?;
+        let path = PathBuf::from(&track_path);
+        let image_data = extract_artwork_data(&path)?;
+        let img = image::load_from_memory(&image_data).ok()?;
         let img = img.resize(128, 128, FilterType::Lanczos3);
         let output = fs::File::create(&cache_path).ok()?;
         let mut buf = std::io::BufWriter::new(output);
@@ -554,6 +551,82 @@ async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
         .map(|p| p.to_string())
 }
 
+// Returns track paths that don't have cached artwork yet
+#[tauri::command]
+fn get_uncached_tracks(app: tauri::AppHandle, track_paths: Vec<String>) -> Vec<String> {
+    let cache_dir = match app.path().app_cache_dir().ok() {
+        Some(d) => d.join("artwork"),
+        None => return track_paths,
+    };
+    track_paths
+        .into_iter()
+        .filter(|path| {
+            let hash = format!("{:x}", md5_simple(path));
+            let cache_path = cache_dir.join(format!("{}.jpg", hash));
+            !cache_path.exists()
+        })
+        .collect()
+}
+
+// Pre-caches artwork for a list of tracks, emitting progress events
+#[tauri::command]
+async fn precache_artwork(app: tauri::AppHandle, track_paths: Vec<String>) -> Result<(), String> {
+    use image::imageops::FilterType;
+    use tauri::Emitter;
+
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artwork");
+    fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+
+    let total = track_paths.len();
+
+    for (i, track_path) in track_paths.iter().enumerate() {
+        let hash = format!("{:x}", md5_simple(track_path));
+        let cache_path = cache_dir.join(format!("{}.jpg", hash));
+
+        if !cache_path.exists() {
+            let path = PathBuf::from(track_path);
+            if let Some(image_data) = extract_artwork_data(&path) {
+                if let Ok(img) = image::load_from_memory(&image_data) {
+                    let img = img.resize(128, 128, FilterType::Lanczos3);
+                    if let Ok(output) = fs::File::create(&cache_path) {
+                        let mut buf = std::io::BufWriter::new(output);
+                        let mut encoder =
+                            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 75);
+                        let _ = encoder.encode_image(&img);
+                    }
+                }
+            }
+        }
+
+        // Emit progress every 10 tracks to avoid flooding the frontend
+        if true {
+            let _ = app.emit(
+                "artwork://progress",
+                serde_json::json!({
+                    "completed": i + 1,
+                    "total": total,
+                    "current_path": track_path,
+                }),
+            );
+        }
+    }
+
+    let _ = app.emit("artwork://done", serde_json::json!({ "total": total }));
+    Ok(())
+}
+
+// Helper — extracts raw image bytes from audio file
+fn extract_artwork_data(path: &PathBuf) -> Option<Vec<u8>> {
+    let tagged_file = Probe::open(path).ok()?.read().ok()?;
+    let tag = tagged_file.primary_tag()?;
+    let picture = tag.pictures().first()?;
+    Some(picture.data().to_vec())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_path = dirs::data_dir()
@@ -601,6 +674,8 @@ pub fn run() {
             get_epub_cover,
             list_epub_contents,
             open_pdf_viewer,
+            get_uncached_tracks,
+            precache_artwork,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
