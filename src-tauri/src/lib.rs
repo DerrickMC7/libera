@@ -149,9 +149,7 @@ fn get_tracks_page(
     offset: usize,
 ) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-
     let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size FROM tracks";
-
     let map_row = |row: &rusqlite::Row| {
         Ok(Track {
             path: row.get(0)?,
@@ -172,7 +170,6 @@ fn get_tracks_page(
             file_size: row.get(15)?,
         })
     };
-
     let tracks: Vec<Track> = if query.is_empty() {
         let mut stmt = conn
             .prepare(&format!(
@@ -189,9 +186,9 @@ fn get_tracks_page(
     } else {
         let pattern = format!("%{}%", query.to_lowercase());
         let mut stmt = conn.prepare(&format!(
-        "{} WHERE LOWER(title) LIKE ?3 OR LOWER(artist) LIKE ?3 OR LOWER(album) LIKE ?3 ORDER BY artist, album, track_number LIMIT ?1 OFFSET ?2",
-        sql_base
-    )).map_err(|e| e.to_string())?;
+            "{} WHERE LOWER(title) LIKE ?3 OR LOWER(artist) LIKE ?3 OR LOWER(album) LIKE ?3 ORDER BY artist, album, track_number LIMIT ?1 OFFSET ?2",
+            sql_base
+        )).map_err(|e| e.to_string())?;
         let x = stmt
             .query_map(rusqlite::params![limit, offset, pattern], map_row)
             .map_err(|e| e.to_string())?
@@ -199,7 +196,6 @@ fn get_tracks_page(
             .collect();
         x
     };
-
     Ok(tracks)
 }
 
@@ -268,6 +264,15 @@ pub struct Book {
     pub file_name: String,
     pub format: String,
     pub file_size: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Album {
+    pub album: String,
+    pub artist: String,
+    pub year: Option<u32>,
+    pub track_count: usize,
+    pub cover_path: String,
 }
 
 #[tauri::command]
@@ -428,21 +433,45 @@ fn extract_epub_title(path: &PathBuf) -> Option<String> {
     None
 }
 
+fn album_hash(album: &str, album_artist: &str) -> String {
+    format!("{:x}", md5_simple(&format!("{}||{}", album, album_artist)))
+}
+
 #[tauri::command]
-fn get_artwork(app: tauri::AppHandle, track_path: String) -> Option<String> {
+fn get_artwork(app: tauri::AppHandle, track_path: String, full: Option<bool>) -> Option<String> {
     use image::imageops::FilterType;
-    let cache_dir = app.path().app_cache_dir().ok()?.join("artwork");
+    let want_full = full.unwrap_or(false);
+    let cache_base = app.path().app_cache_dir().ok()?.join("artwork");
+    let cache_dir = if want_full {
+        cache_base.join("full")
+    } else {
+        cache_base.join("thumb")
+    };
     fs::create_dir_all(&cache_dir).ok()?;
-    let hash = format!("{:x}", md5_simple(&track_path));
+
+    // Try to get album info from track metadata
+    let path = PathBuf::from(&track_path);
+    let tagged_file = Probe::open(&path).ok()?.read().ok()?;
+    let tag = tagged_file.primary_tag()?;
+    let album = tag.album().map(|s| s.to_string()).unwrap_or_default();
+    let album_artist = tag
+        .get_string(&lofty::tag::ItemKey::AlbumArtist)
+        .map(|s| s.to_string())
+        .or_else(|| tag.artist().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    let hash = album_hash(&album, &album_artist);
     let cache_path = cache_dir.join(format!("{}.jpg", hash));
+
     if !cache_path.exists() {
-        let path = PathBuf::from(&track_path);
-        let image_data = extract_artwork_data(&path)?;
-        let img = image::load_from_memory(&image_data).ok()?;
-        let img = img.resize(128, 128, FilterType::Lanczos3);
+        let picture = tag.pictures().first()?;
+        let image_data = picture.data();
+        let img = image::load_from_memory(image_data).ok()?;
+        let (size, quality) = if want_full { (400, 85) } else { (128, 75) };
+        let img = img.resize(size, size, FilterType::Lanczos3);
         let output = fs::File::create(&cache_path).ok()?;
         let mut buf = std::io::BufWriter::new(output);
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 75);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
         encoder.encode_image(&img).ok()?;
     }
     Some(cache_path.to_string_lossy().to_string())
@@ -454,6 +483,148 @@ fn md5_simple(input: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     input.hash(&mut hasher);
     hasher.finish()
+}
+
+fn extract_artwork_data(path: &PathBuf) -> Option<Vec<u8>> {
+    let tagged_file = Probe::open(path).ok()?.read().ok()?;
+    let tag = tagged_file.primary_tag()?;
+    let picture = tag.pictures().first()?;
+    Some(picture.data().to_vec())
+}
+
+#[tauri::command]
+fn get_uncached_tracks(app: tauri::AppHandle, track_paths: Vec<String>) -> Vec<String> {
+    let cache_dir = match app.path().app_cache_dir().ok() {
+        Some(d) => d.join("artwork").join("thumb"),
+        None => return track_paths,
+    };
+
+    // Deduplicate by album — only return one track per unique album
+    let mut seen_albums = std::collections::HashSet::new();
+    let mut uncached: Vec<String> = Vec::new();
+
+    for track_path in track_paths {
+        let path = PathBuf::from(&track_path);
+        let Ok(tagged_file) = Probe::open(&path).and_then(|p| p.read()) else {
+            continue;
+        };
+        let Some(tag) = tagged_file.primary_tag() else {
+            continue;
+        };
+        let album = tag.album().map(|s| s.to_string()).unwrap_or_default();
+        let album_artist = tag
+            .get_string(&lofty::tag::ItemKey::AlbumArtist)
+            .map(|s| s.to_string())
+            .or_else(|| tag.artist().map(|s| s.to_string()))
+            .unwrap_or_default();
+        let hash = album_hash(&album, &album_artist);
+
+        if seen_albums.contains(&hash) {
+            continue;
+        }
+        seen_albums.insert(hash.clone());
+
+        let thumb_path = cache_dir.join(format!("{}.jpg", hash));
+        if !thumb_path.exists() {
+            uncached.push(track_path);
+        }
+    }
+    uncached
+}
+
+#[tauri::command]
+async fn precache_artwork(app: tauri::AppHandle, track_paths: Vec<String>) -> Result<(), String> {
+    use image::imageops::FilterType;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tauri::Emitter;
+
+    let cache_base = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artwork");
+    let thumb_dir = cache_base.join("thumb");
+    let full_dir = cache_base.join("full");
+    fs::create_dir_all(&thumb_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&full_dir).map_err(|e| e.to_string())?;
+
+    let total = track_paths.len();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let app_clone = app.clone();
+    let thumb_dir = Arc::new(thumb_dir);
+    let full_dir = Arc::new(full_dir);
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).max(2))
+        .unwrap_or(4);
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .map_err(|e| e.to_string())?;
+    pool.install(|| {
+        track_paths.par_iter().for_each(|track_path| {
+            let path = PathBuf::from(track_path);
+            let Ok(tagged_file) = Probe::open(&path).and_then(|p| p.read()) else {
+                completed.fetch_add(1, Ordering::Relaxed);
+                return;
+            };
+            let Some(tag) = tagged_file.primary_tag() else {
+                completed.fetch_add(1, Ordering::Relaxed);
+                return;
+            };
+            let album = tag.album().map(|s| s.to_string()).unwrap_or_default();
+            let album_artist = tag
+                .get_string(&lofty::tag::ItemKey::AlbumArtist)
+                .map(|s| s.to_string())
+                .or_else(|| tag.artist().map(|s| s.to_string()))
+                .unwrap_or_default();
+            let hash = album_hash(&album, &album_artist);
+            let thumb_path = thumb_dir.join(format!("{}.jpg", hash));
+            let full_path = full_dir.join(format!("{}.jpg", hash));
+
+            if !thumb_path.exists() || !full_path.exists() {
+                if let Some(picture) = tag.pictures().first() {
+                    if let Ok(img) = image::load_from_memory(picture.data()) {
+                        if !thumb_path.exists() {
+                            let thumb = img.resize(128, 128, FilterType::Lanczos3);
+                            if let Ok(output) = fs::File::create(&thumb_path) {
+                                let mut buf = std::io::BufWriter::new(output);
+                                let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                                    &mut buf, 75,
+                                );
+                                let _ = enc.encode_image(&thumb);
+                            }
+                        }
+                        if !full_path.exists() {
+                            let full = img.resize(400, 400, FilterType::Lanczos3);
+                            if let Ok(output) = fs::File::create(&full_path) {
+                                let mut buf = std::io::BufWriter::new(output);
+                                let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                                    &mut buf, 85,
+                                );
+                                let _ = enc.encode_image(&full);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = app_clone.emit(
+                "artwork://progress",
+                serde_json::json!({
+                    "completed": done,
+                    "total": total,
+                    "current_path": track_path,
+                }),
+            );
+        });
+    });
+
+    let _ = app.emit("artwork://done", serde_json::json!({ "total": total }));
+    Ok(())
 }
 
 #[tauri::command]
@@ -551,80 +722,70 @@ async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
         .map(|p| p.to_string())
 }
 
-// Returns track paths that don't have cached artwork yet
 #[tauri::command]
-fn get_uncached_tracks(app: tauri::AppHandle, track_paths: Vec<String>) -> Vec<String> {
-    let cache_dir = match app.path().app_cache_dir().ok() {
-        Some(d) => d.join("artwork"),
-        None => return track_paths,
-    };
-    track_paths
-        .into_iter()
-        .filter(|path| {
-            let hash = format!("{:x}", md5_simple(path));
-            let cache_path = cache_dir.join(format!("{}.jpg", hash));
-            !cache_path.exists()
+fn get_albums(state: State<DbState>) -> Result<Vec<Album>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let mut stmt = conn.prepare(
+        "SELECT album, album_artist as artist, MIN(year) as year, COUNT(*) as track_count, MIN(path) as cover_path
+         FROM tracks GROUP BY album, album_artist ORDER BY album_artist, album"
+    ).map_err(|e| e.to_string())?;
+    let albums = stmt
+        .query_map([], |row| {
+            Ok(Album {
+                album: row.get(0)?,
+                artist: row.get(1)?,
+                year: row.get(2)?,
+                track_count: row.get::<_, i64>(3)? as usize,
+                cover_path: row.get(4)?,
+            })
         })
-        .collect()
-}
-
-// Pre-caches artwork for a list of tracks, emitting progress events
-#[tauri::command]
-async fn precache_artwork(app: tauri::AppHandle, track_paths: Vec<String>) -> Result<(), String> {
-    use image::imageops::FilterType;
-    use tauri::Emitter;
-
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
         .map_err(|e| e.to_string())?
-        .join("artwork");
-    fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
-
-    let total = track_paths.len();
-
-    for (i, track_path) in track_paths.iter().enumerate() {
-        let hash = format!("{:x}", md5_simple(track_path));
-        let cache_path = cache_dir.join(format!("{}.jpg", hash));
-
-        if !cache_path.exists() {
-            let path = PathBuf::from(track_path);
-            if let Some(image_data) = extract_artwork_data(&path) {
-                if let Ok(img) = image::load_from_memory(&image_data) {
-                    let img = img.resize(128, 128, FilterType::Lanczos3);
-                    if let Ok(output) = fs::File::create(&cache_path) {
-                        let mut buf = std::io::BufWriter::new(output);
-                        let mut encoder =
-                            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 75);
-                        let _ = encoder.encode_image(&img);
-                    }
-                }
-            }
-        }
-
-        // Emit progress every 10 tracks to avoid flooding the frontend
-        if true {
-            let _ = app.emit(
-                "artwork://progress",
-                serde_json::json!({
-                    "completed": i + 1,
-                    "total": total,
-                    "current_path": track_path,
-                }),
-            );
-        }
-    }
-
-    let _ = app.emit("artwork://done", serde_json::json!({ "total": total }));
-    Ok(())
+        .filter_map(|a| a.ok())
+        .collect();
+    Ok(albums)
 }
 
-// Helper — extracts raw image bytes from audio file
-fn extract_artwork_data(path: &PathBuf) -> Option<Vec<u8>> {
-    let tagged_file = Probe::open(path).ok()?.read().ok()?;
-    let tag = tagged_file.primary_tag()?;
-    let picture = tag.pictures().first()?;
-    Some(picture.data().to_vec())
+#[tauri::command]
+fn get_album_tracks(
+    state: State<DbState>,
+    album: String,
+    artist: String,
+) -> Result<Vec<Track>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT path, title, artist, album, album_artist, genre, year,
+         track_number, track_total, disc_number, disc_total,
+         duration_secs, bitrate, sample_rate, channels, file_size
+         FROM tracks WHERE album = ?1 AND album_artist = ?2
+         ORDER BY disc_number, track_number",
+        )
+        .map_err(|e| e.to_string())?;
+    let tracks = stmt
+        .query_map(rusqlite::params![album, artist], |row| {
+            Ok(Track {
+                path: row.get(0)?,
+                title: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                album_artist: row.get(4)?,
+                genre: row.get(5)?,
+                year: row.get(6)?,
+                track_number: row.get(7)?,
+                track_total: row.get(8)?,
+                disc_number: row.get(9)?,
+                disc_total: row.get(10)?,
+                duration_secs: row.get(11)?,
+                bitrate: row.get(12)?,
+                sample_rate: row.get(13)?,
+                channels: row.get(14)?,
+                file_size: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|t| t.ok())
+        .collect();
+    Ok(tracks)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -633,11 +794,9 @@ pub fn run() {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("libera")
         .join("libera.db");
-
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).expect("Failed to create database directory");
     }
-
     let manager = SqliteConnectionManager::file(&db_path)
         .with_flags(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
@@ -646,16 +805,13 @@ pub fn run() {
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
             Ok(())
         });
-
     let pool = Pool::builder()
         .max_size(8)
         .build(manager)
         .expect("Failed to create connection pool");
-
     let conn = pool.get().expect("Failed to get connection");
     initialize_database(&conn).expect("Failed to initialize database");
     drop(conn);
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -676,6 +832,8 @@ pub fn run() {
             open_pdf_viewer,
             get_uncached_tracks,
             precache_artwork,
+            get_albums,
+            get_album_tracks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
