@@ -8,6 +8,7 @@ import { Button } from "../atoms/Button";
 import { TrackRow } from "../molecules/TrackRow";
 import { Track } from "../../types/track";
 import { invoke } from "@tauri-apps/api/core";
+import { AlbumGrid } from "./AlbumGrid";
 
 const SKELETON_EXTRA = 20;
 const MAX_PAGES_IN_MEMORY = 6;
@@ -40,6 +41,7 @@ function SkeletonRow({ opacity }: { opacity: number }) {
 }
 
 export function MusicLibrary() {
+  const [view, setView] = useState<"tracks" | "albums">("tracks");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const pagesRef = useRef<Map<number, Track[]>>(new Map());
@@ -88,7 +90,6 @@ export function MusicLibrary() {
       if (pagesRef.current.has(pageIndex)) return;
       if (loadingRef.current.has(pageIndex)) return;
       if (activeLoadsRef.current >= MAX_CONCURRENT_LOADS) return;
-
       loadingRef.current.add(pageIndex);
       activeLoadsRef.current++;
       const offset = pageIndex * PAGE_SIZE;
@@ -191,6 +192,7 @@ export function MusicLibrary() {
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
+      {/* Header — always visible */}
       <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
         <div className="flex items-end justify-between mb-7">
           <div>
@@ -210,74 +212,103 @@ export function MusicLibrary() {
           </Button>
         </div>
 
-        <input
-          type="text"
-          placeholder="Search tracks, artists, albums..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 mb-6 transition-colors"
-        />
-
-        <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
-          <span>Title</span>
-          <span>Artist</span>
-          <span>Album</span>
-          <span className="text-right">Time</span>
+        {/* View tabs */}
+        <div className="flex gap-1 mb-6">
+          {(["tracks", "albums"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-widest uppercase transition-colors ${
+                view === v
+                  ? "bg-[#d4872a]/15 text-[#d4872a]"
+                  : "text-[#3a3628] hover:text-[#7a7060]"
+              }`}
+            >
+              {v}
+            </button>
+          ))}
         </div>
-      </div>
 
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto px-10 py-4"
-        onScroll={handleScroll}
-      >
-        {!isPending && totalCount === 0 && (
-          <div className="flex flex-col items-center justify-center mt-32 gap-3">
-            <p className="text-[#3a3628] text-sm">Your library is empty</p>
-            <p className="text-[#3a3628] text-xs">
-              Click "Add folder" to scan your music
-            </p>
-          </div>
-        )}
-
-        {totalCount > 0 && (
-          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
-            {virtualizer.getVirtualItems().map((virtualItem: VirtualItem) => {
-              const index = virtualItem.index;
-              const track = getTrack(index);
-              const isSkeleton = index >= totalCount || !track;
-              const skeletonOpacity = index >= totalCount
-                ? Math.max(0, 1 - (index - totalCount) * 0.08)
-                : 1;
-
-              return (
-                <div
-                  key={virtualItem.key}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    transform: `translateY(${virtualItem.start}px)`,
-                  }}
-                >
-                  {isSkeleton ? (
-                    <SkeletonRow opacity={skeletonOpacity} />
-                  ) : (
-                    <TrackRow
-                      track={track}
-                      index={index}
-                      isActive={currentTrack?.path === track.path}
-                      isScrolling={isScrollingRef.current}
-                      onClick={() => handlePlay(index)}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
+        {/* Search + column headers — only in tracks view */}
+        {view === "tracks" && (
+          <>
+            <input
+              type="text"
+              placeholder="Search tracks, artists, albums..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 mb-6 transition-colors"
+            />
+            <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
+              <span>Title</span>
+              <span>Artist</span>
+              <span>Album</span>
+              <span className="text-right">Time</span>
+            </div>
+          </>
         )}
       </div>
+
+      {/* Body */}
+      {view === "albums" ? (
+        <div className="flex-1 overflow-hidden">
+          <AlbumGrid />
+        </div>
+      ) : (
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto px-10 py-4"
+          onScroll={handleScroll}
+        >
+          {!isPending && totalCount === 0 && (
+            <div className="flex flex-col items-center justify-center mt-32 gap-3">
+              <p className="text-[#3a3628] text-sm">Your library is empty</p>
+              <p className="text-[#3a3628] text-xs">
+                Click "Add folder" to scan your music
+              </p>
+            </div>
+          )}
+
+          {totalCount > 0 && (
+            <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+              {virtualizer.getVirtualItems().map((virtualItem: VirtualItem) => {
+                const index = virtualItem.index;
+                const track = getTrack(index);
+                const isSkeleton = index >= totalCount || !track;
+                const skeletonOpacity =
+                  index >= totalCount
+                    ? Math.max(0, 1 - (index - totalCount) * 0.08)
+                    : 1;
+
+                return (
+                  <div
+                    key={virtualItem.key}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${virtualItem.start}px)`,
+                    }}
+                  >
+                    {isSkeleton ? (
+                      <SkeletonRow opacity={skeletonOpacity} />
+                    ) : (
+                      <TrackRow
+                        track={track}
+                        index={index}
+                        isActive={currentTrack?.path === track.path}
+                        isScrolling={isScrollingRef.current}
+                        onClick={() => handlePlay(index)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
