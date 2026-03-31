@@ -2,10 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { useQuery } from "@tanstack/react-query";
 import { Album } from "../types/album";
 
-export function useAlbums() {
+export function useAlbums(search: string = "", enabled: boolean = true) {
   return useQuery({
-    queryKey: ["albums"],
-    queryFn: () => invoke<Album[]>("get_albums"),
+    queryKey: ["albums", search],
+    queryFn: () => invoke<Album[]>("search_albums", { query: search }),
     staleTime: 1000 * 60 * 5,
+    enabled,
   });
 }
