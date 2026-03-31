@@ -218,11 +218,10 @@ export function MusicLibrary() {
             <button
               key={v}
               onClick={() => setView(v)}
-              className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-widest uppercase transition-colors ${
-                view === v
-                  ? "bg-[#d4872a]/15 text-[#d4872a]"
-                  : "text-[#3a3628] hover:text-[#7a7060]"
-              }`}
+              className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-widest uppercase transition-colors ${view === v
+                ? "bg-[#d4872a]/15 text-[#d4872a]"
+                : "text-[#3a3628] hover:text-[#7a7060]"
+                }`}
             >
               {v}
             </button>
@@ -250,11 +249,11 @@ export function MusicLibrary() {
       </div>
 
       {/* Body */}
-      {view === "albums" ? (
-        <div className="flex-1 overflow-hidden">
-          <AlbumGrid />
-        </div>
-      ) : (
+      <div className={`flex-1 overflow-hidden ${view === "albums" ? "block" : "hidden"}`}>
+        <AlbumGrid active={view === "albums"} />
+      </div>
+
+      {view === "tracks" && (
         <div
           ref={scrollRef}
           className="flex-1 overflow-y-auto px-10 py-4"

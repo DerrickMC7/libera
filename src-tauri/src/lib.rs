@@ -45,6 +45,7 @@ fn initialize_database(conn: &rusqlite::Connection) -> SqlResult<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
         CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
+        CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
         CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);",
     )?;
     Ok(())
@@ -467,7 +468,7 @@ fn get_artwork(app: tauri::AppHandle, track_path: String, full: Option<bool>) ->
         let picture = tag.pictures().first()?;
         let image_data = picture.data();
         let img = image::load_from_memory(image_data).ok()?;
-        let (size, quality) = if want_full { (400, 85) } else { (128, 75) };
+        let (size, quality) = if want_full { (300, 80) } else { (128, 75) };
         let img = img.resize(size, size, FilterType::Lanczos3);
         let output = fs::File::create(&cache_path).ok()?;
         let mut buf = std::io::BufWriter::new(output);
@@ -483,13 +484,6 @@ fn md5_simple(input: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     input.hash(&mut hasher);
     hasher.finish()
-}
-
-fn extract_artwork_data(path: &PathBuf) -> Option<Vec<u8>> {
-    let tagged_file = Probe::open(path).ok()?.read().ok()?;
-    let tag = tagged_file.primary_tag()?;
-    let picture = tag.pictures().first()?;
-    Some(picture.data().to_vec())
 }
 
 #[tauri::command]
@@ -598,7 +592,7 @@ async fn precache_artwork(app: tauri::AppHandle, track_paths: Vec<String>) -> Re
                             }
                         }
                         if !full_path.exists() {
-                            let full = img.resize(400, 400, FilterType::Lanczos3);
+                            let full = img.resize(300, 300, FilterType::Lanczos3);
                             if let Ok(output) = fs::File::create(&full_path) {
                                 let mut buf = std::io::BufWriter::new(output);
                                 let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(
@@ -788,6 +782,62 @@ fn get_album_tracks(
     Ok(tracks)
 }
 
+#[tauri::command]
+fn get_albums_count(state: State<DbState>, query: String) -> Result<usize, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let count: usize = if query.is_empty() {
+        conn.query_row(
+            "SELECT COUNT(DISTINCT album || '||' || album_artist) FROM tracks",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?
+    } else {
+        let pattern = format!("%{}%", query.to_lowercase());
+        conn.query_row(
+            "SELECT COUNT(DISTINCT album || '||' || album_artist) FROM tracks WHERE LOWER(album) LIKE ?1 OR LOWER(album_artist) LIKE ?1",
+            rusqlite::params![pattern],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?
+    };
+    Ok(count)
+}
+
+#[tauri::command]
+fn search_albums(state: State<DbState>, query: String) -> Result<Vec<Album>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+
+    let sql = if query.is_empty() {
+        "SELECT album, album_artist as artist, MIN(year) as year, COUNT(*) as track_count, MIN(path) as cover_path
+         FROM tracks GROUP BY album, album_artist ORDER BY album_artist, album".to_string()
+    } else {
+        let pattern = format!("%{}%", query.to_lowercase());
+        format!(
+            "SELECT album, album_artist as artist, MIN(year) as year, COUNT(*) as track_count, MIN(path) as cover_path
+             FROM tracks WHERE LOWER(album) LIKE '{pattern}' OR LOWER(album_artist) LIKE '{pattern}'
+             GROUP BY album, album_artist ORDER BY album_artist, album"
+        )
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let albums = stmt
+        .query_map([], |row| {
+            Ok(Album {
+                album: row.get(0)?,
+                artist: row.get(1)?,
+                year: row.get(2)?,
+                track_count: row.get::<_, i64>(3)? as usize,
+                cover_path: row.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|a| a.ok())
+        .collect();
+
+    Ok(albums)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_path = dirs::data_dir()
@@ -834,6 +884,8 @@ pub fn run() {
             precache_artwork,
             get_albums,
             get_album_tracks,
+            get_albums_count,
+            search_albums,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
