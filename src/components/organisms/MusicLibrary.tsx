@@ -9,10 +9,14 @@ import { TrackRow } from "../molecules/TrackRow";
 import { Track } from "../../types/track";
 import { invoke } from "@tauri-apps/api/core";
 import { AlbumGrid } from "./AlbumGrid";
+import { ArtistList } from "./ArtistList";
+import { GenreList } from "./GenreList";
 
 const SKELETON_EXTRA = 20;
 const MAX_PAGES_IN_MEMORY = 6;
 const MAX_CONCURRENT_LOADS = 2;
+
+type View = "tracks" | "albums" | "artists" | "genres";
 
 function SkeletonRow({ opacity }: { opacity: number }) {
   return (
@@ -41,7 +45,7 @@ function SkeletonRow({ opacity }: { opacity: number }) {
 }
 
 export function MusicLibrary() {
-  const [view, setView] = useState<"tracks" | "albums">("tracks");
+  const [view, setView] = useState<View>("tracks");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const pagesRef = useRef<Map<number, Track[]>>(new Map());
@@ -190,9 +194,11 @@ export function MusicLibrary() {
     loadVisiblePages();
   }
 
+  const views: View[] = ["tracks", "albums", "artists", "genres"];
+
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
-      {/* Header — always visible */}
+      {/* Header */}
       <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
         <div className="flex items-end justify-between mb-7">
           <div>
@@ -214,14 +220,15 @@ export function MusicLibrary() {
 
         {/* View tabs */}
         <div className="flex gap-1 mb-6">
-          {(["tracks", "albums"] as const).map((v) => (
+          {views.map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
-              className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-widest uppercase transition-colors ${view === v
-                ? "bg-[#d4872a]/15 text-[#d4872a]"
-                : "text-[#3a3628] hover:text-[#7a7060]"
-                }`}
+              className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-widest uppercase transition-colors ${
+                view === v
+                  ? "bg-[#d4872a]/15 text-[#d4872a]"
+                  : "text-[#3a3628] hover:text-[#7a7060]"
+              }`}
             >
               {v}
             </button>
@@ -251,6 +258,14 @@ export function MusicLibrary() {
       {/* Body */}
       <div className={`flex-1 overflow-hidden ${view === "albums" ? "block" : "hidden"}`}>
         <AlbumGrid active={view === "albums"} />
+      </div>
+
+      <div className={`flex-1 overflow-hidden ${view === "artists" ? "block" : "hidden"}`}>
+        <ArtistList active={view === "artists"} />
+      </div>
+
+      <div className={`flex-1 overflow-hidden ${view === "genres" ? "block" : "hidden"}`}>
+        <GenreList active={view === "genres"} />
       </div>
 
       {view === "tracks" && (
