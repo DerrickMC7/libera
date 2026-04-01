@@ -838,6 +838,196 @@ fn search_albums(state: State<DbState>, query: String) -> Result<Vec<Album>, Str
     Ok(albums)
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Artist {
+    pub name: String,
+    pub album_count: usize,
+    pub track_count: usize,
+    pub cover_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Genre {
+    pub name: String,
+    pub track_count: usize,
+    pub cover_path: String,
+}
+
+#[tauri::command]
+fn search_artists(state: State<DbState>, query: String) -> Result<Vec<Artist>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let mut stmt = if query.is_empty() {
+        conn.prepare(
+            "SELECT album_artist,
+                    COUNT(DISTINCT album) as album_count,
+                    COUNT(*) as track_count,
+                    MIN(path) as cover_path
+             FROM tracks
+             GROUP BY album_artist
+             ORDER BY album_artist"
+        ).map_err(|e| e.to_string())?
+    } else {
+        let pattern = format!("%{}%", query.to_lowercase());
+        conn.prepare(&format!(
+            "SELECT album_artist,
+                    COUNT(DISTINCT album) as album_count,
+                    COUNT(*) as track_count,
+                    MIN(path) as cover_path
+             FROM tracks
+             WHERE LOWER(album_artist) LIKE '{pattern}'
+             GROUP BY album_artist
+             ORDER BY album_artist"
+        )).map_err(|e| e.to_string())?
+    };
+    let artists = stmt.query_map([], |row| {
+        Ok(Artist {
+            name: row.get(0)?,
+            album_count: row.get::<_, i64>(1)? as usize,
+            track_count: row.get::<_, i64>(2)? as usize,
+            cover_path: row.get(3)?,
+        })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|a| a.ok())
+    .collect();
+    Ok(artists)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ArtistAlbum {
+    pub album: String,
+    pub year: Option<u32>,
+    pub track_count: usize,
+    pub cover_path: String,
+    pub tracks: Vec<Track>,
+}
+
+#[tauri::command]
+fn get_artist_details(state: State<DbState>, artist: String) -> Result<Vec<ArtistAlbum>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+
+    // Get albums for this artist
+    let mut album_stmt = conn.prepare(
+        "SELECT album, MIN(year), COUNT(*), MIN(path)
+         FROM tracks WHERE album_artist = ?1
+         GROUP BY album
+         ORDER BY MIN(year), album"
+    ).map_err(|e| e.to_string())?;
+
+    let albums: Vec<(String, Option<u32>, usize, String)> = album_stmt
+        .query_map(rusqlite::params![artist], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<u32>>(1)?,
+                row.get::<_, i64>(2)? as usize,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|a| a.ok())
+        .collect();
+
+    let mut result = Vec::new();
+    for (album_name, year, track_count, cover_path) in albums {
+        let mut track_stmt = conn.prepare(
+            "SELECT path, title, artist, album, album_artist, genre, year,
+             track_number, track_total, disc_number, disc_total,
+             duration_secs, bitrate, sample_rate, channels, file_size
+             FROM tracks WHERE album_artist = ?1 AND album = ?2
+             ORDER BY disc_number, track_number"
+        ).map_err(|e| e.to_string())?;
+
+        let tracks: Vec<Track> = track_stmt
+            .query_map(rusqlite::params![artist, album_name], |row| {
+                Ok(Track {
+                    path: row.get(0)?, title: row.get(1)?, artist: row.get(2)?,
+                    album: row.get(3)?, album_artist: row.get(4)?, genre: row.get(5)?,
+                    year: row.get(6)?, track_number: row.get(7)?, track_total: row.get(8)?,
+                    disc_number: row.get(9)?, disc_total: row.get(10)?,
+                    duration_secs: row.get(11)?, bitrate: row.get(12)?,
+                    sample_rate: row.get(13)?, channels: row.get(14)?, file_size: row.get(15)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|t| t.ok())
+            .collect();
+
+        result.push(ArtistAlbum {
+            album: album_name,
+            year,
+            track_count,
+            cover_path,
+            tracks,
+        });
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+fn search_genres(state: State<DbState>, query: String) -> Result<Vec<Genre>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let mut stmt = if query.is_empty() {
+        conn.prepare(
+            "SELECT genre, COUNT(*) as track_count, MIN(path) as cover_path
+             FROM tracks
+             GROUP BY genre
+             ORDER BY genre"
+        ).map_err(|e| e.to_string())?
+    } else {
+        let pattern = format!("%{}%", query.to_lowercase());
+        conn.prepare(&format!(
+            "SELECT genre, COUNT(*) as track_count, MIN(path) as cover_path
+             FROM tracks
+             WHERE LOWER(genre) LIKE '{pattern}'
+             GROUP BY genre
+             ORDER BY genre"
+        )).map_err(|e| e.to_string())?
+    };
+    let genres = stmt.query_map([], |row| {
+        Ok(Genre {
+            name: row.get(0)?,
+            track_count: row.get::<_, i64>(1)? as usize,
+            cover_path: row.get(2)?,
+        })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|g| g.ok())
+    .collect();
+    Ok(genres)
+}
+
+#[tauri::command]
+fn get_genre_tracks(
+    state: State<DbState>,
+    genre: String,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<Track>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let mut stmt = conn.prepare(
+        "SELECT path, title, artist, album, album_artist, genre, year,
+         track_number, track_total, disc_number, disc_total,
+         duration_secs, bitrate, sample_rate, channels, file_size
+         FROM tracks WHERE genre = ?1
+         ORDER BY artist, album, track_number
+         LIMIT ?2 OFFSET ?3"
+    ).map_err(|e| e.to_string())?;
+    let tracks = stmt.query_map(rusqlite::params![genre, limit, offset], |row| {
+        Ok(Track {
+            path: row.get(0)?, title: row.get(1)?, artist: row.get(2)?,
+            album: row.get(3)?, album_artist: row.get(4)?, genre: row.get(5)?,
+            year: row.get(6)?, track_number: row.get(7)?, track_total: row.get(8)?,
+            disc_number: row.get(9)?, disc_total: row.get(10)?,
+            duration_secs: row.get(11)?, bitrate: row.get(12)?,
+            sample_rate: row.get(13)?, channels: row.get(14)?, file_size: row.get(15)?,
+        })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|t| t.ok())
+    .collect();
+    Ok(tracks)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_path = dirs::data_dir()
@@ -886,6 +1076,7 @@ pub fn run() {
             get_album_tracks,
             get_albums_count,
             search_albums,
+            search_artists, get_artist_details, search_genres, get_genre_tracks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
