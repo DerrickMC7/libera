@@ -1,11 +1,79 @@
+import { useState, useRef, useEffect, useCallback } from "react";
+
 interface VolumeSliderProps {
   volume: number;
   onVolumeChange: (volume: number) => void;
 }
 
 export function VolumeSlider({ volume, onVolumeChange }: VolumeSliderProps) {
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const [tooltipOpacity, setTooltipOpacity] = useState(0);
+  const rangeRef = useRef<HTMLInputElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const STEP = 0.01;
+
+  const cancelHide = useCallback(() => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+
+  const showTooltip = useCallback(() => {
+    cancelHide();
+    setTooltipVisible(true);
+    setTooltipOpacity(1);
+  }, [cancelHide]);
+
+  const scheduleHide = useCallback(() => {
+    cancelHide();
+    hideTimerRef.current = setTimeout(() => {
+      setTooltipOpacity(0);
+      setTimeout(() => setTooltipVisible(false), 200);
+    }, 150);
+  }, [cancelHide]);
+
+  useEffect(() => {
+    const range = rangeRef.current;
+    if (!range) return;
+
+    const handleMouseDown = () => {
+      isDraggingRef.current = true;
+      showTooltip();
+    };
+
+    const handleMouseUp = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        scheduleHide();
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -STEP : STEP;
+      const newVol = Math.max(0, Math.min(1, volume + delta));
+      onVolumeChange(newVol);
+      showTooltip();
+      scheduleHide();
+    };
+
+    range.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("mouseup", handleMouseUp);
+    range.addEventListener("wheel", handleWheel, { passive: false });
+
+    return () => {
+      range.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("mouseup", handleMouseUp);
+      range.removeEventListener("wheel", handleWheel);
+    };
+  }, [volume, onVolumeChange, showTooltip, scheduleHide]);
+
   return (
-    <div className="flex items-center gap-2 w-32">
+    <div className="flex items-center gap-2 pr-4" style={{ width: "160px" }}>
       <svg
         width="14"
         height="14"
@@ -19,15 +87,33 @@ export function VolumeSlider({ volume, onVolumeChange }: VolumeSliderProps) {
           <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
         )}
       </svg>
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={volume}
-        onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-        className="flex-1 accent-[#d4872a] cursor-pointer"
-      />
+      <div className="flex-1 relative">
+        <input
+          ref={rangeRef}
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={volume}
+          onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+          className="w-full accent-[#d4872a] cursor-pointer h-2 rounded-full"
+        />
+        {tooltipVisible && (
+          <div
+            ref={tooltipRef}
+            className="absolute pointer-events-none bg-[#161410]/95 backdrop-blur-sm text-[#f0ead8] text-xs px-2 py-1 rounded-lg border border-white/10 shadow-lg whitespace-nowrap z-50"
+            style={{
+              opacity: tooltipOpacity,
+              transition: "opacity 0.2s ease",
+              top: "-2.5rem",
+              left: "50%",
+              transform: "translateX(-50%)",
+            }}
+          >
+            {Math.round(volume * 100)}%
+          </div>
+        )}
+      </div>
     </div>
   );
 }

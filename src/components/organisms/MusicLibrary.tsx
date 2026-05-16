@@ -12,6 +12,7 @@ import { AlbumGrid } from "./AlbumGrid";
 import { ArtistList } from "./ArtistList";
 import { GenreList } from "./GenreList";
 
+const IS_DEMO = !("__TAURI_INTERNALS__" in window);
 const SKELETON_EXTRA = 20;
 const MAX_PAGES_IN_MEMORY = 6;
 const MAX_CONCURRENT_LOADS = 2;
@@ -44,7 +45,7 @@ function SkeletonRow({ opacity }: { opacity: number }) {
   );
 }
 
-export function MusicLibrary() {
+export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const [view, setView] = useState<View>("tracks");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -213,9 +214,11 @@ export function MusicLibrary() {
               <em className="italic text-[#c8bfa8] font-light">library</em>
             </h1>
           </div>
-          <Button variant="primary" onClick={handleScan} disabled={isPending}>
-            {isPending ? "Scanning..." : "Add folder"}
-          </Button>
+          {!IS_DEMO && (
+            <Button variant="primary" onClick={handleScan} disabled={isPending}>
+              {isPending ? "Scanning..." : "Add folder"}
+            </Button>
+          )}
         </div>
 
         {/* View tabs */}

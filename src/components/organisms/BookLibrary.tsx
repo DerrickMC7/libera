@@ -6,6 +6,8 @@ import { PdfReader } from "./PdfReader/PdfReader";
 import { EpubViewer } from "./EpubViewer";
 import { Book } from "../../types/book";
 
+const IS_DEMO = !("__TAURI_INTERNALS__" in window);
+
 export function BookLibrary() {
   const { data: books = [], isLoading } = useBooks();
   const { mutate: scanBooks, isPending } = useScanBooks();
@@ -66,9 +68,11 @@ export function BookLibrary() {
               Books <em className="italic text-[#c8bfa8] font-light">& papers</em>
             </h1>
           </div>
-          <Button variant="primary" onClick={handleScan} disabled={isPending}>
-            {isPending ? "Scanning..." : "Add folder"}
-          </Button>
+          {!IS_DEMO && (
+            <Button variant="primary" onClick={handleScan} disabled={isPending}>
+              {isPending ? "Scanning..." : "Add folder"}
+            </Button>
+          )}
         </div>
 
         {/* Search */}
