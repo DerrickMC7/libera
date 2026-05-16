@@ -4,7 +4,9 @@ import { NavRail } from "./NavRail";
 import { MusicLibrary } from "./MusicLibrary";
 import { BookLibrary } from "./BookLibrary";
 import { SearchPage } from "../../pages/SearchPage";
+import { SettingsPage } from "../../pages/SettingsPage";
 import { CacheProgress } from "./CacheProgress";
+import { UnderConstruction } from "./UnderConstruction";
 import { useCacheStore } from "../../store/cacheStore";
 
 const pageVariants = {
@@ -17,7 +19,6 @@ export function Shell() {
   const [activeSection, setActiveSection] = useState("music");
   const { isProcessing, isFirstTime } = useCacheStore();
 
-  // Block navigation during first-time setup
   function handleNavigate(section: string) {
     if (isProcessing && isFirstTime) return;
     setActiveSection(section);
@@ -31,13 +32,7 @@ export function Shell() {
         disabled={isProcessing && isFirstTime}
       />
       <main className="overflow-hidden h-full pb-20 flex flex-col">
-        {/* First-time full screen overlay */}
         <CacheProgress />
-
-        {/* Non-first-time banner inside music section */}
-        {isProcessing && !isFirstTime && activeSection === "music" && (
-          <CacheProgress />
-        )}
 
         <div className="flex-1 overflow-hidden">
           <AnimatePresence mode="wait">
@@ -51,8 +46,20 @@ export function Shell() {
               className="h-full"
             >
               {activeSection === "music" && <MusicLibrary />}
+              {activeSection === "films" && (
+                <UnderConstruction
+                  name="Films"
+                  description="Video library and player — coming in the next major release."
+                />
+              )}
               {activeSection === "books" && <BookLibrary />}
               {activeSection === "search" && <SearchPage />}
+              {activeSection === "settings" && (
+                <UnderConstruction
+                  name="Settings"
+                  description="App preferences, themes, and equalizer configuration — coming soon."
+                />
+              )}
             </motion.div>
           </AnimatePresence>
         </div>

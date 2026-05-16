@@ -1,14 +1,15 @@
-# TODO: Complete Artists & Genres sections like Albums
+# Equalizer Fix TODO
 
-## Plan Breakdown
-1. ✅ Plan approved & TODO created
-2. ✅ `src/components/molecules/ArtistCard.tsx`
-3. ✅ `src/components/organisms/ArtistGrid.tsx`
-4. Create `src/components/molecules/GenreCard.tsx`
-5. Create `src/components/organisms/GenreGrid.tsx`
-6. Edit `src/components/organisms/MusicLibrary.tsx` - Add tabs + conditionals for artists/genres
-7. Test: `pnpm dev`
-8. ✅ Complete
+## Status: [x] 2/7 Complete
 
-**Current: Step 7** Test with `pnpm dev`
+- [x] **Step 1**: Read `src/store/settingsStore.ts` ✓ Perfect state
+- [x] **Step 2**: Implement `src/hooks/useEqualizer.ts` ✓ AudioContext + 10-band peaking filters + passthrough
+- [ ] **Step 3**: Refactor `src/hooks/useAudioPlayer.ts` to route MediaElementSourceNode → equalizer
+- [ ] **Step 4**: Update `src/components/organisms/AudioPlayer.tsx` for refs/control
+- [ ] **Step 5**: Test playback + EQ effect
+- [ ] **Step 6**: Visualization with analyser data
+- [ ] **Step 7**: Track change/seek/volume sync
+- [ ] **Done**: `pnpm tauri dev`
+
+**Next**: Step 3
 
