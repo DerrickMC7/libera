@@ -65,7 +65,7 @@ function GenreView({ genre, onBack }: { genre: Genre; onBack: () => void }) {
       limit: 500,
       offset: 0,
     }).then((t) => {
-      setTracks(t);
+      setTracks(t ?? []);
       setIsLoading(false);
     });
   }, [genre.name]);

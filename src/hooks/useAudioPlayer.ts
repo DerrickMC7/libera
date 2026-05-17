@@ -24,7 +24,7 @@ export function useAudioPlayer() {
       const { repeat } = usePlayerStore.getState();
       if (repeat === "one" && audioRef.current) {
         audioRef.current.currentTime = 0;
-        audioRef.current.play();
+        audioRef.current.play().catch(console.error);
       } else {
         usePlayerStore.getState().nextTrack();
       }
@@ -37,20 +37,17 @@ export function useAudioPlayer() {
 
   useEffect(() => {
     if (!audioRef.current || !currentTrack) return;
-    const url = convertFileSrc(currentTrack.path);
-    audioRef.current.src = url;
-    audioRef.current.load();
-    if (isPlaying) audioRef.current.play();
+    audioRef.current.src = convertFileSrc(currentTrack.path);
   }, [currentTrack]);
 
   useEffect(() => {
     if (!audioRef.current) return;
     if (isPlaying) {
-      audioRef.current.play();
+      audioRef.current.play().catch(console.error);
     } else {
       audioRef.current.pause();
     }
-  }, [isPlaying]);
+  }, [isPlaying, currentTrack]);
 
   useEffect(() => {
     if (!audioRef.current) return;
