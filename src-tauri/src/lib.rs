@@ -453,7 +453,10 @@ fn get_artwork(app: tauri::AppHandle, track_path: String, full: Option<bool>) ->
     // Try to get album info from track metadata
     let path = PathBuf::from(&track_path);
     let tagged_file = Probe::open(&path).ok()?.read().ok()?;
-    let tag = tagged_file.primary_tag()?;
+    // Fall back to any available tag if there is no "primary" one
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())?;
     let album = tag.album().map(|s| s.to_string()).unwrap_or_default();
     let album_artist = tag
         .get_string(&lofty::tag::ItemKey::AlbumArtist)
@@ -502,7 +505,7 @@ fn get_uncached_tracks(app: tauri::AppHandle, track_paths: Vec<String>) -> Vec<S
         let Ok(tagged_file) = Probe::open(&path).and_then(|p| p.read()) else {
             continue;
         };
-        let Some(tag) = tagged_file.primary_tag() else {
+        let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) else {
             continue;
         };
         let album = tag.album().map(|s| s.to_string()).unwrap_or_default();
@@ -564,7 +567,7 @@ async fn precache_artwork(app: tauri::AppHandle, track_paths: Vec<String>) -> Re
                 completed.fetch_add(1, Ordering::Relaxed);
                 return;
             };
-            let Some(tag) = tagged_file.primary_tag() else {
+            let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) else {
                 completed.fetch_add(1, Ordering::Relaxed);
                 return;
             };

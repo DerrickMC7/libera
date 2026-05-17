@@ -4,7 +4,7 @@ export async function invoke<T>(command: string, args?: Record<string, unknown>)
   return mockInvoke<T>(command, args);
 }
 
-// In demo mode, track.path is already a web URL — return it unchanged.
+// In demo mode, track paths are root-relative URLs served by Vite from public/.
 export function convertFileSrc(filePath: string): string {
   return filePath;
 }

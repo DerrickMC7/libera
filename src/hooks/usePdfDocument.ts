@@ -42,7 +42,10 @@ const assetUrl = w.__TAURI_INTERNALS__
   ? w.__TAURI_INTERNALS__.convertFileSrc(filePath!)
   : filePath!;
 
-        const loadingTask = pdfjsLib.getDocument(assetUrl);
+        const loadingTask = pdfjsLib.getDocument({
+          url: assetUrl,
+          wasmUrl: "/pdf-wasm/",
+        });
         const doc = await loadingTask.promise;
         if (cancelled) { doc.destroy(); return; }
 

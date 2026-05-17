@@ -4,9 +4,29 @@ import { Artist, ArtistAlbum } from "../types/artist";
 import { Book } from "../types/book";
 import { Genre } from "../types/genre";
 
+// ── Demo artwork ─────────────────────────────────────────────────────────────
+
+const COMPOSER_IMAGES: Record<string, string> = {
+  beethoven: "/images/beethoven.jpg",
+  chopin:    "/images/chopin.jpg",
+  bach:      "/images/bach.jpg",
+  mozart:    "/images/mozart.jpg",
+  debussy:   "/images/debussy.jpg",
+};
+
+function makeDemoArtwork(path: string): string {
+  const lpath = path.toLowerCase();
+  for (const [name, imgPath] of Object.entries(COMPOSER_IMAGES)) {
+    if (lpath.includes(name)) return imgPath;
+  }
+  return "/images/beethoven.jpg"; // generic fallback
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const DEMO_TRACKS: Track[] = [
   {
-    path: "https://upload.wikimedia.org/wikipedia/commons/d/da/Beethoven_-_Fur_Elise.ogg",
+    path: "/audio/beethoven-fur-elise.mp3",
     title: "Für Elise",
     artist: "Ludwig van Beethoven",
     album: "Piano Pieces",
@@ -17,14 +37,14 @@ export const DEMO_TRACKS: Track[] = [
     track_total: 2,
     disc_number: 1,
     disc_total: 1,
-    duration_secs: 199,
-    bitrate: 192,
+    duration_secs: 170,
+    bitrate: 128,
     sample_rate: 44100,
     channels: 2,
-    file_size: 4780000,
+    file_size: 1361952,
   },
   {
-    path: "https://upload.wikimedia.org/wikipedia/commons/5/54/Beethoven_Moonlight_Sonata_Op._27_No._2.ogg",
+    path: "/audio/beethoven-moonlight-sonata.mp3",
     title: "Moonlight Sonata, Op. 27 No. 2",
     artist: "Ludwig van Beethoven",
     album: "Piano Pieces",
@@ -35,14 +55,14 @@ export const DEMO_TRACKS: Track[] = [
     track_total: 2,
     disc_number: 1,
     disc_total: 1,
-    duration_secs: 318,
-    bitrate: 192,
+    duration_secs: 428,
+    bitrate: 160,
     sample_rate: 44100,
     channels: 2,
-    file_size: 7630000,
+    file_size: 8316510,
   },
   {
-    path: "https://upload.wikimedia.org/wikipedia/commons/b/b8/Chopin_-_Nocturne_op_9_no_1.ogg",
+    path: "/audio/chopin-nocturne-op9-no1.mp3",
     title: "Nocturne in B♭ Minor, Op. 9 No. 1",
     artist: "Frédéric Chopin",
     album: "Nocturnes",
@@ -53,14 +73,14 @@ export const DEMO_TRACKS: Track[] = [
     track_total: 2,
     disc_number: 1,
     disc_total: 1,
-    duration_secs: 334,
+    duration_secs: 328,
     bitrate: 192,
     sample_rate: 44100,
     channels: 2,
-    file_size: 8020000,
+    file_size: 7873851,
   },
   {
-    path: "https://upload.wikimedia.org/wikipedia/commons/e/e1/Chopin_Nocturne_op9_no2.ogg",
+    path: "/audio/chopin-nocturne-op9-no2.mp3",
     title: "Nocturne in E♭ Major, Op. 9 No. 2",
     artist: "Frédéric Chopin",
     album: "Nocturnes",
@@ -71,14 +91,14 @@ export const DEMO_TRACKS: Track[] = [
     track_total: 2,
     disc_number: 1,
     disc_total: 1,
-    duration_secs: 273,
-    bitrate: 192,
+    duration_secs: 240,
+    bitrate: 160,
     sample_rate: 44100,
     channels: 2,
-    file_size: 6550000,
+    file_size: 4799250,
   },
   {
-    path: "https://upload.wikimedia.org/wikipedia/commons/4/41/BWV_846_Prelude.ogg",
+    path: "/audio/bach-bwv-846-prelude.mp3",
     title: "Prelude in C Major, BWV 846",
     artist: "Johann Sebastian Bach",
     album: "The Well-Tempered Clavier",
@@ -86,17 +106,17 @@ export const DEMO_TRACKS: Track[] = [
     genre: "Baroque",
     year: 1722,
     track_number: 1,
-    track_total: 2,
+    track_total: 1,
     disc_number: 1,
     disc_total: 1,
-    duration_secs: 150,
-    bitrate: 192,
+    duration_secs: 166,
+    bitrate: 147,
     sample_rate: 44100,
     channels: 2,
-    file_size: 3600000,
+    file_size: 3069356,
   },
   {
-    path: "https://upload.wikimedia.org/wikipedia/commons/a/a0/Mozart_-_Eine_kleine_Nachtmusik_-_1._Allegro.ogg",
+    path: "/audio/mozart-eine-kleine-nachtmusik.mp3",
     title: "Eine kleine Nachtmusik — I. Allegro",
     artist: "Wolfgang Amadeus Mozart",
     album: "Serenade No. 13",
@@ -107,14 +127,14 @@ export const DEMO_TRACKS: Track[] = [
     track_total: 4,
     disc_number: 1,
     disc_total: 1,
-    duration_secs: 357,
-    bitrate: 192,
+    duration_secs: 340,
+    bitrate: 160,
     sample_rate: 44100,
     channels: 2,
-    file_size: 8570000,
+    file_size: 7567258,
   },
   {
-    path: "https://upload.wikimedia.org/wikipedia/commons/a/a7/Debussy_-_Clair_de_lune.ogg",
+    path: "/audio/debussy-clair-de-lune.mp3",
     title: "Clair de lune",
     artist: "Claude Debussy",
     album: "Suite bergamasque",
@@ -125,50 +145,50 @@ export const DEMO_TRACKS: Track[] = [
     track_total: 4,
     disc_number: 1,
     disc_total: 1,
-    duration_secs: 290,
-    bitrate: 192,
+    duration_secs: 207,
+    bitrate: 287,
     sample_rate: 44100,
     channels: 2,
-    file_size: 6960000,
+    file_size: 7548416,
   },
 ];
 
 export const DEMO_ALBUMS: Album[] = [
-  { album: "Nocturnes", artist: "Frédéric Chopin", year: 1832, track_count: 2, cover_path: "" },
-  { album: "Piano Pieces", artist: "Ludwig van Beethoven", year: 1810, track_count: 2, cover_path: "" },
-  { album: "Serenade No. 13", artist: "Wolfgang Amadeus Mozart", year: 1787, track_count: 1, cover_path: "" },
-  { album: "Suite bergamasque", artist: "Claude Debussy", year: 1905, track_count: 1, cover_path: "" },
-  { album: "The Well-Tempered Clavier", artist: "Johann Sebastian Bach", year: 1722, track_count: 1, cover_path: "" },
+  { album: "Nocturnes", artist: "Frédéric Chopin", year: 1832, track_count: 2, cover_path: "demo://Chopin/nocturne-op9-no1" },
+  { album: "Piano Pieces", artist: "Ludwig van Beethoven", year: 1810, track_count: 2, cover_path: "demo://Beethoven/fur-elise" },
+  { album: "Serenade No. 13", artist: "Wolfgang Amadeus Mozart", year: 1787, track_count: 1, cover_path: "demo://Mozart/eine-kleine-nachtmusik" },
+  { album: "Suite bergamasque", artist: "Claude Debussy", year: 1905, track_count: 1, cover_path: "demo://Debussy/clair-de-lune" },
+  { album: "The Well-Tempered Clavier", artist: "Johann Sebastian Bach", year: 1722, track_count: 1, cover_path: "demo://Bach/bwv-846-prelude" },
 ];
 
 export const DEMO_ARTISTS: Artist[] = [
-  { name: "Claude Debussy", album_count: 1, track_count: 1, cover_path: "" },
-  { name: "Frédéric Chopin", album_count: 1, track_count: 2, cover_path: "" },
-  { name: "Johann Sebastian Bach", album_count: 1, track_count: 1, cover_path: "" },
-  { name: "Ludwig van Beethoven", album_count: 1, track_count: 2, cover_path: "" },
-  { name: "Wolfgang Amadeus Mozart", album_count: 1, track_count: 1, cover_path: "" },
+  { name: "Claude Debussy", album_count: 1, track_count: 1, cover_path: "demo://Debussy/clair-de-lune" },
+  { name: "Frédéric Chopin", album_count: 1, track_count: 2, cover_path: "demo://Chopin/nocturne-op9-no1" },
+  { name: "Johann Sebastian Bach", album_count: 1, track_count: 1, cover_path: "demo://Bach/bwv-846-prelude" },
+  { name: "Ludwig van Beethoven", album_count: 1, track_count: 2, cover_path: "demo://Beethoven/fur-elise" },
+  { name: "Wolfgang Amadeus Mozart", album_count: 1, track_count: 1, cover_path: "demo://Mozart/eine-kleine-nachtmusik" },
 ];
 
 export const DEMO_GENRES: Genre[] = [
-  { name: "Baroque", track_count: 1, cover_path: "" },
-  { name: "Classical", track_count: 5, cover_path: "" },
-  { name: "Impressionist", track_count: 1, cover_path: "" },
+  { name: "Baroque", track_count: 1, cover_path: "demo://Bach/bwv-846-prelude" },
+  { name: "Classical", track_count: 5, cover_path: "demo://Beethoven/fur-elise" },
+  { name: "Impressionist", track_count: 1, cover_path: "demo://Debussy/clair-de-lune" },
 ];
 
 export const DEMO_BOOKS: Book[] = [
   {
-    path: "https://www.gutenberg.org/files/1661/1661-pdf.pdf",
+    path: "/books/sherlock-holmes.pdf",
     title: "The Adventures of Sherlock Holmes",
     file_name: "sherlock-holmes.pdf",
     format: "pdf",
-    file_size: 857000,
+    file_size: 15450422,
   },
   {
-    path: "https://www.gutenberg.org/files/1342/1342-pdf.pdf",
+    path: "/books/pride-and-prejudice.pdf",
     title: "Pride and Prejudice",
     file_name: "pride-and-prejudice.pdf",
     format: "pdf",
-    file_size: 704000,
+    file_size: 10702341,
   },
 ];
 
@@ -245,6 +265,12 @@ export function mockInvoke<T>(command: string, args?: Record<string, unknown>): 
       return Promise.resolve(tracks as unknown as T);
     }
 
+    case "get_genre_tracks": {
+      const genreName = args?.genre as string;
+      const tracks = DEMO_TRACKS.filter((t) => t.genre === genreName);
+      return Promise.resolve(tracks as unknown as T);
+    }
+
     case "search_genres": {
       const filtered = q
         ? DEMO_GENRES.filter((g) => g.name.toLowerCase().includes(q))
@@ -255,7 +281,11 @@ export function mockInvoke<T>(command: string, args?: Record<string, unknown>): 
     case "get_books":
       return Promise.resolve(DEMO_BOOKS as unknown as T);
 
-    case "get_artwork":
+    case "get_artwork": {
+      const trackPath = args?.trackPath as string ?? "";
+      return Promise.resolve(makeDemoArtwork(trackPath) as unknown as T);
+    }
+
     case "get_epub_cover":
       return Promise.resolve(null as unknown as T);
 
