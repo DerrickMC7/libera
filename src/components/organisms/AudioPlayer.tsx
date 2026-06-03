@@ -9,7 +9,6 @@ import { ShuffleButton } from "../atoms/ShuffleButton";
 import { RepeatButton } from "../atoms/RepeatButton";
 import { useArtwork } from "../../hooks/useArtwork";
 import { Equalizer } from "./Equalizer";
-import { useEqualizer } from "../../hooks/useEqualizer";
 
 export function AudioPlayer() {
   const { progress, duration, seek } = useAudioPlayer();
@@ -22,8 +21,6 @@ export function AudioPlayer() {
   const { data: artworkUrl } = useArtwork(currentTrack?.path);
   const [eqOpen, setEqOpen] = useState(false);
   const eqRef = useRef<HTMLDivElement>(null);
-
-  // EQ handled by useAudioPlayer
 
   // Close EQ popup on outside click
   useEffect(() => {

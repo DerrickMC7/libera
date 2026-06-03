@@ -42,10 +42,10 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
           </span>
           <button
             onClick={() => setEqEnabled(!eqEnabled)}
-            className={`relative w-9 h-5 rounded-full transition-colors ${eqEnabled ? "bg-[#d4872a]" : "bg-[#2a2820]"}`}
+            className={`relative w-9 h-5 rounded-full transition-colors overflow-hidden ${eqEnabled ? "bg-[#d4872a]" : "bg-[#2a2820]"}`}
           >
             <span
-              className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${eqEnabled ? "translate-x-4" : "translate-x-0.5"}`}
+              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${eqEnabled ? "translate-x-4" : ""}`}
             />
           </button>
         </div>
