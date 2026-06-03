@@ -1,17 +1,3 @@
-import { useEffect } from "react";
-import { useSettingsStore } from "../store/settingsStore";
-
-export function useEqualizer() {
-  const {
-    eqEnabled, eqBands, activePresetId,
-    setEqEnabled, setEqBand, applyPreset,
-  } = useSettingsStore();
-
-  useEffect(() => {
-    console.log('EQ enabled:', eqEnabled, 'bands:', eqBands.map(b => ({f: b.frequency, g: b.gain})));
-  }, [eqEnabled, eqBands]);
-
-  // Placeholder - EQ implementation will go here
-  // Currently connects in useAudioPlayer via global AudioContext
-}
-
+// EQ audio processing is handled inside useAudioPlayer (Web Audio API filter chain).
+// This file is kept as a re-export for convenience if other components need EQ state.
+export { useSettingsStore as useEqualizer } from "../store/settingsStore";
