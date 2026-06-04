@@ -1,6 +1,6 @@
 import { useState, useEffect, useDeferredValue, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useAlbums } from "../../hooks/useAlbums";
+import { useAlbums, AlbumSortBy } from "../../hooks/useAlbums";
 import { AlbumCard } from "../molecules/AlbumCard";
 import { AlbumView } from "./AlbumView";
 import { Album } from "../../types/album";
@@ -10,6 +10,7 @@ const GAP = 24;
 
 interface AlbumGridProps {
   active?: boolean;
+  onDetailChange?: (isDetail: boolean) => void;
 }
 
 function SkeletonCard({ opacity }: { opacity: number }) {
@@ -30,10 +31,16 @@ function calcCardWidth(width: number, cols: number) {
   return Math.floor((width - (cols - 1) * GAP) / cols);
 }
 
-export function AlbumGrid({ active = true }: AlbumGridProps) {
+const SORT_OPTIONS: { id: AlbumSortBy; label: string }[] = [
+  { id: "name",   label: "Name" },
+  { id: "artist", label: "Artist" },
+];
+
+export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [sortBy, setSortBy] = useState<AlbumSortBy>("name");
   const [selectedAlbum, setSelectedAlbum] = useState<Album | null>(null);
   const [columns, setColumns] = useState(() => {
     const w = window.innerWidth - 52 - 80;
@@ -52,7 +59,9 @@ export function AlbumGrid({ active = true }: AlbumGridProps) {
     return () => clearTimeout(t);
   }, [deferredSearch]);
 
-  const { data: albums = [], isLoading } = useAlbums(debouncedSearch, active);
+  const { data: albums = [], isLoading } = useAlbums(debouncedSearch, active, sortBy);
+
+  useEffect(() => { onDetailChange?.(!!selectedAlbum); }, [selectedAlbum]);
 
   // ResizeObserver — accurate once DOM is ready
   useEffect(() => {
@@ -112,13 +121,30 @@ export function AlbumGrid({ active = true }: AlbumGridProps) {
           </h1>
         </div>
 
-        <input
-          type="text"
-          placeholder="Search albums, artists..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-6 transition-colors"
-        />
+        <div className="flex gap-3 mb-6">
+          <input
+            type="text"
+            placeholder="Search albums, artists..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+          />
+          <div className="flex gap-1 shrink-0">
+            {SORT_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => setSortBy(opt.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors ${
+                  sortBy === opt.id
+                    ? "bg-[var(--accent-a10)] text-[var(--accent)]"
+                    : "text-[#3a3628] hover:text-[#7a7060] bg-[#1f1d18]"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Grid */}

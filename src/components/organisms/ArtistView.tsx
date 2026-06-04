@@ -111,17 +111,18 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b] overflow-y-auto">
-      {/* Artist banner */}
-      <div className="relative w-full h-64 shrink-0 overflow-hidden">
+      {/* Banner grows to image's natural size; max-h caps tall portrait fallbacks.
+          The bottom gradient fades over the clip edge so the cut is invisible. */}
+      <div className="relative w-full shrink-0 overflow-hidden max-h-[500px]">
         {bannerUrl ? (
           <img
             src={bannerUrl}
             alt={artist.name}
-            className={`w-full h-full object-cover ${isWideBanner ? "object-center" : "object-top scale-105"}`}
-            style={{ filter: isWideBanner ? "brightness(0.7)" : "blur(2px) brightness(0.7)" }}
+            className="w-full h-auto block"
+            style={{ filter: "brightness(0.65)" }}
           />
         ) : (
-          <div className="w-full h-full bg-[#1a1814]" />
+          <div className="h-48 bg-[#1a1814]" />
         )}
 
         {/* Gradient: dark top (for back button legibility) + fade-to-bg at bottom */}
@@ -142,8 +143,8 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
         <div className="absolute bottom-6 left-10 z-10">
           <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-2">Artist</p>
           <h1
-            className="text-[48px] leading-none tracking-[-1.5px] text-white font-light drop-shadow-xl"
-            style={{ fontFamily: "Fraunces, serif", textShadow: "0 2px 16px rgba(0,0,0,0.7)" }}
+            className="text-[48px] leading-none tracking-[-1.5px] font-light drop-shadow-xl"
+            style={{ fontFamily: "Fraunces, serif", textShadow: "0 2px 16px rgba(0,0,0,0.7)", color: "white" }}
           >
             {artist.name}
           </h1>

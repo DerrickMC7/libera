@@ -14,14 +14,15 @@ export function useTracksCount(search: string = "") {
   });
 }
 
-export function useTracksPage(search: string, offset: number, enabled = true) {
+export function useTracksPage(search: string, offset: number, enabled = true, sortBy = "artist") {
   return useQuery({
-    queryKey: ["tracks-page", search, offset],
+    queryKey: ["tracks-page", search, offset, sortBy],
     queryFn: () =>
       invoke<Track[]>("get_tracks_page", {
         query: search,
         limit: PAGE_SIZE,
         offset,
+        sortBy,
       }),
     staleTime: 1000 * 60 * 5,
     enabled,

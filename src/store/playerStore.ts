@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { Track } from "../types/track";
 
 type RepeatMode = "off" | "all" | "one";
@@ -98,7 +99,9 @@ function smartShuffle(queue: Track[], currentIdx: number, manualPaths: string[])
   return [...before, ...shuffledFuture];
 }
 
-export const usePlayerStore = create<PlayerState>((set, get) => ({
+export const usePlayerStore = create<PlayerState>()(
+  persist(
+    (set, get) => ({
   currentTrack: null,
   isPlaying: false,
   volume: 0.25,
@@ -223,4 +226,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       manualQueuePaths: [...manualQueuePaths, track.path],
     });
   },
-}));
+}),
+{
+  name: "libera-player",
+  partialize: (s) => ({ volume: s.volume, shuffle: s.shuffle, repeat: s.repeat }),
+}
+));

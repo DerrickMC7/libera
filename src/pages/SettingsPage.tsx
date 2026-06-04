@@ -31,11 +31,17 @@ export function SettingsPage() {
     setCrossfadeDuration, setNormalizeVolume,
   } = useSettingsStore();
 
-  async function handleClearLibrary(type: "music" | "books" | "all" | "wipe") {
+  async function handleClearLibrary(type: "music" | "books" | "artist_images" | "artist_banners" | "all" | "wipe") {
     try {
       if (type === "wipe") {
         await invoke("clear_all_data");
         queryClient.clear();
+      } else if (type === "artist_images") {
+        await invoke("clear_artist_images");
+        queryClient.invalidateQueries({ queryKey: ["artist-image"] });
+      } else if (type === "artist_banners") {
+        await invoke("clear_artist_banners");
+        queryClient.invalidateQueries({ queryKey: ["artist-banner"] });
       } else {
         if (type === "music" || type === "all") {
           await invoke("clear_music_library");
@@ -53,6 +59,7 @@ export function SettingsPage() {
           await invoke("clear_artwork_cache");
           queryClient.invalidateQueries({ queryKey: ["artwork"] });
           queryClient.invalidateQueries({ queryKey: ["artist-image"] });
+          queryClient.invalidateQueries({ queryKey: ["artist-banner"] });
         }
       }
       setFeedback("Done!");
@@ -118,10 +125,12 @@ export function SettingsPage() {
 
             <div className="flex flex-col gap-4">
               {[
-                { id: "music", label: "Clear music library", desc: "Removes all tracks and albums from the database", danger: true },
-                { id: "books", label: "Clear books library", desc: "Removes all books and papers from the database", danger: true },
-                { id: "all", label: "Clear everything", desc: "Removes all content and deletes artwork cache files", danger: true },
-              { id: "wipe", label: "Delete all app data", desc: "Wipes database, all cached images, and artist photos — for a clean uninstall", danger: true },
+                { id: "music",          label: "Clear music library",        desc: "Removes all tracks and albums from the database", danger: true },
+                { id: "books",          label: "Clear books library",         desc: "Removes all books and papers from the database", danger: true },
+                { id: "artist_images",  label: "Delete artist images",        desc: "Deletes all downloaded artist portrait photos", danger: true },
+                { id: "artist_banners", label: "Delete artist banners",       desc: "Deletes all downloaded artist banner images", danger: true },
+                { id: "all",            label: "Clear everything",            desc: "Removes all content and deletes artwork cache files", danger: true },
+                { id: "wipe",           label: "Delete all app data",         desc: "Wipes database, all cached images, and artist photos — for a clean uninstall", danger: true },
               ].map((item) => (
                 <div key={item.id} className="flex items-center justify-between p-4 rounded-xl bg-[#161410] border border-white/5">
                   <div>

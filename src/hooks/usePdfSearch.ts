@@ -76,30 +76,41 @@ const divHeight = textDiv.offsetHeight;
             (sm) => sm.end > matchIndex && sm.start < matchEnd
           );
 
-       for (const sm of overlapping) {
-  const spanRect = sm.span.getBoundingClientRect();
-  const divRect = textDiv.getBoundingClientRect();
+        // Shared canvas for precise text measurement (handles multi-byte / CJK / emoji)
+        const canvas = document.createElement("canvas");
+        const canvasCtx = canvas.getContext("2d")!;
 
-  const spanText = sm.span.textContent || "";
-  const spanWidth = spanRect.width;
-  const spanHeight = spanRect.height;
+        for (const sm of overlapping) {
+          const spanRect = sm.span.getBoundingClientRect();
+          const divRect  = textDiv.getBoundingClientRect();
 
-  const overlapStart = Math.max(matchIndex, sm.start) - sm.start;
-  const overlapEnd = Math.min(matchEnd, sm.end) - sm.start;
-  const charWidth = spanText.length > 0 ? spanWidth / spanText.length : spanWidth;
+          const spanText   = sm.span.textContent || "";
+          const spanHeight = spanRect.height;
 
-  const xOffset = overlapStart * charWidth;
-  const w = (overlapEnd - overlapStart) * charWidth;
-  if (w <= 0) continue;
+          // Match the span's computed font so measurement is accurate
+          const computedFont = window.getComputedStyle(sm.span).font;
+          if (computedFont) canvasCtx.font = computedFont;
 
-  found.push({
-    pageNumber: pageNum,
-    x: spanRect.left - divRect.left + xOffset,
-    y: spanRect.top - divRect.top,
-    width: w,
-    height: spanHeight,
-  });
-}
+          const overlapStart = Math.max(matchIndex, sm.start) - sm.start;
+          const overlapEnd   = Math.min(matchEnd, sm.end)   - sm.start;
+
+          const prefixWidth = canvasCtx.measureText(spanText.slice(0, overlapStart)).width;
+          const matchWidth  = canvasCtx.measureText(spanText.slice(overlapStart, overlapEnd)).width;
+          if (matchWidth <= 0) continue;
+
+          // Scale canvas pixels to actual rendered pixels using the ratio of
+          // the span's rendered width to the canvas-measured full width
+          const fullMeasured = canvasCtx.measureText(spanText).width;
+          const scale = fullMeasured > 0 ? spanRect.width / fullMeasured : 1;
+
+          found.push({
+            pageNumber: pageNum,
+            x: spanRect.left - divRect.left + prefixWidth * scale,
+            y: spanRect.top  - divRect.top,
+            width:  matchWidth * scale,
+            height: spanHeight,
+          });
+        }
 
           searchFrom = matchIndex + 1;
         }
