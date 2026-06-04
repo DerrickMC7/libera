@@ -12,5 +12,6 @@ export function useArtistBanner(artistName: string | undefined) {
     },
     enabled: !!artistName,
     staleTime: Infinity,
+    gcTime: 1000 * 60 * 30,
   });
 }

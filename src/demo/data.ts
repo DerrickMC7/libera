@@ -42,6 +42,7 @@ export const DEMO_TRACKS: Track[] = [
     sample_rate: 44100,
     channels: 2,
     file_size: 1361952,
+    mbid: null,
   },
   {
     path: "/audio/beethoven-moonlight-sonata.mp3",
@@ -60,6 +61,7 @@ export const DEMO_TRACKS: Track[] = [
     sample_rate: 44100,
     channels: 2,
     file_size: 8316510,
+    mbid: null,
   },
   {
     path: "/audio/chopin-nocturne-op9-no1.mp3",
@@ -78,6 +80,7 @@ export const DEMO_TRACKS: Track[] = [
     sample_rate: 44100,
     channels: 2,
     file_size: 7873851,
+    mbid: null,
   },
   {
     path: "/audio/chopin-nocturne-op9-no2.mp3",
@@ -96,6 +99,7 @@ export const DEMO_TRACKS: Track[] = [
     sample_rate: 44100,
     channels: 2,
     file_size: 4799250,
+    mbid: null,
   },
   {
     path: "/audio/bach-bwv-846-prelude.mp3",
@@ -114,6 +118,7 @@ export const DEMO_TRACKS: Track[] = [
     sample_rate: 44100,
     channels: 2,
     file_size: 3069356,
+    mbid: null,
   },
   {
     path: "/audio/mozart-eine-kleine-nachtmusik.mp3",
@@ -132,6 +137,7 @@ export const DEMO_TRACKS: Track[] = [
     sample_rate: 44100,
     channels: 2,
     file_size: 7567258,
+    mbid: null,
   },
   {
     path: "/audio/debussy-clair-de-lune.mp3",
@@ -150,6 +156,7 @@ export const DEMO_TRACKS: Track[] = [
     sample_rate: 44100,
     channels: 2,
     file_size: 7548416,
+    mbid: null,
   },
 ];
 

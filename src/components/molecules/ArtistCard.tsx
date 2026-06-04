@@ -32,13 +32,13 @@ export function ArtistCard({ artist, onClick }: ArtistCardProps) {
         )}
 
         {/* Bottom gradient with overlaid text */}
-        <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
+        <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/90 via-black/50 to-transparent" />
 
         <div className="absolute inset-x-0 bottom-0 px-3 pb-3">
-          <p className="text-sm font-light text-white truncate leading-snug">
+          <p className="text-sm font-light truncate leading-snug drop-shadow" style={{ color: "white" }}>
             {artist.name}
           </p>
-          <p className="text-[11px] text-white/50 font-mono mt-0.5 truncate">
+          <p className="text-[11px] font-mono mt-0.5 truncate" style={{ color: "rgba(255,255,255,0.8)" }}>
             {artist.album_count} {artist.album_count === 1 ? "album" : "albums"}
             {" · "}
             {artist.track_count} tracks

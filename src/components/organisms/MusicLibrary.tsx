@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useTransition } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { VirtualItem } from "@tanstack/react-virtual";
@@ -19,6 +19,14 @@ const MAX_PAGES_IN_MEMORY = 6;
 const MAX_CONCURRENT_LOADS = 2;
 
 type View = "tracks" | "albums" | "artists" | "genres";
+type TrackSortBy = "title" | "artist" | "duration_asc" | "duration_desc";
+
+const TRACK_SORT_OPTIONS: { id: TrackSortBy; label: string }[] = [
+  { id: "title",        label: "Title" },
+  { id: "artist",       label: "Artist" },
+  { id: "duration_asc", label: "Short first" },
+  { id: "duration_desc",label: "Long first" },
+];
 
 function SkeletonRow({ opacity }: { opacity: number }) {
   return (
@@ -51,6 +59,8 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const [resetKeys, setResetKeys] = useState({ albums: 0, artists: 0, genres: 0 });
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [trackSortBy, setTrackSortBy] = useState<TrackSortBy>("title");
+  const [isDetailView, setIsDetailView] = useState(false);
   const pagesRef = useRef<Map<number, Track[]>>(new Map());
   const pageOrderRef = useRef<number[]>([]);
   const loadingRef = useRef<Set<number>>(new Set());
@@ -58,7 +68,8 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const isScrollingRef = useRef(false);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [tick, setTick] = useState(0);
-  const forceUpdate = useCallback(() => setTick((t) => t + 1), []);
+  const [, startTransition] = useTransition();
+  const forceUpdate = useCallback(() => startTransition(() => setTick((t) => t + 1)), [startTransition]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const { mutate: scanFolder, isPending } = useScanFolder();
@@ -78,6 +89,15 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     }, 300);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Clear page cache when sort order changes
+  useEffect(() => {
+    pagesRef.current.clear();
+    pageOrderRef.current = [];
+    loadingRef.current.clear();
+    activeLoadsRef.current = 0;
+    forceUpdate();
+  }, [trackSortBy]);
 
   const { data: totalCount = 0 } = useTracksCount(debouncedSearch);
 
@@ -102,12 +122,13 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
       const offset = pageIndex * PAGE_SIZE;
       try {
         const tracks = await queryClient.fetchQuery({
-          queryKey: ["tracks-page", debouncedSearch, offset],
+          queryKey: ["tracks-page", debouncedSearch, offset, trackSortBy],
           queryFn: () =>
             invoke<Track[]>("get_tracks_page", {
               query: debouncedSearch,
               limit: PAGE_SIZE,
               offset,
+              sortBy: trackSortBy,
             }),
           staleTime: 1000 * 60 * 5,
         });
@@ -123,7 +144,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
         activeLoadsRef.current--;
       }
     },
-    [debouncedSearch, queryClient, forceUpdate, evictOldPages]
+    [debouncedSearch, trackSortBy, queryClient, forceUpdate, evictOldPages]
   );
 
   function getTrack(index: number): Track | null {
@@ -203,25 +224,27 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
       <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="flex items-end justify-between mb-7">
-          <div>
-            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
-              Your Collection
-            </p>
-            <h1
-              className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
-              style={{ fontFamily: "Fraunces, serif" }}
-            >
-              Music{" "}
-              <em className="italic text-[#c8bfa8] font-light">library</em>
-            </h1>
+        {!isDetailView && (
+          <div className="flex items-end justify-between mb-7">
+            <div>
+              <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
+                Your Collection
+              </p>
+              <h1
+                className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+                style={{ fontFamily: "Fraunces, serif" }}
+              >
+                Music{" "}
+                <em className="italic text-[#c8bfa8] font-light">library</em>
+              </h1>
+            </div>
+            {!IS_DEMO && (
+              <Button variant="primary" onClick={handleScan} disabled={isPending}>
+                {isPending ? "Scanning..." : "Add folder"}
+              </Button>
+            )}
           </div>
-          {!IS_DEMO && (
-            <Button variant="primary" onClick={handleScan} disabled={isPending}>
-              {isPending ? "Scanning..." : "Add folder"}
-            </Button>
-          )}
-        </div>
+        )}
 
         {/* View tabs */}
         <div className="flex gap-1 mb-6">
@@ -230,6 +253,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
               key={v}
               onClick={() => {
                 setView(v);
+                setIsDetailView(false);
                 if (v === "albums") setResetKeys((k) => ({ ...k, albums: k.albums + 1 }));
                 else if (v === "artists") setResetKeys((k) => ({ ...k, artists: k.artists + 1 }));
                 else if (v === "genres") setResetKeys((k) => ({ ...k, genres: k.genres + 1 }));
@@ -250,17 +274,34 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
           ))}
         </div>
 
-        {/* Search + column headers — only in tracks view */}
-        {view === "tracks" && (
+        {/* Search + sort + column headers — only in tracks view, not in detail views */}
+        {view === "tracks" && !isDetailView && (
           <>
-            <input
-              type="text"
-              placeholder="Search tracks, artists, albums..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-6 transition-colors"
-            />
-            <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
+            <div className="flex gap-3 mb-4">
+              <input
+                type="text"
+                placeholder="Search tracks, artists, albums..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+              />
+            </div>
+            <div className="flex gap-1 mb-4 flex-wrap">
+              {TRACK_SORT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setTrackSortBy(opt.id)}
+                  className={`px-3 py-1 rounded-lg text-xs font-mono transition-colors ${
+                    trackSortBy === opt.id
+                      ? "bg-[var(--accent-a10)] text-[var(--accent)]"
+                      : "text-[#3a3628] hover:text-[#7a7060]"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-[2fr_1fr_1fr_120px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
               <span>Title</span>
               <span>Artist</span>
               <span>Album</span>
@@ -347,9 +388,9 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
               transition={{ duration: 0.15 }}
               className="absolute inset-0 overflow-hidden"
             >
-              {view === "albums" && <AlbumGrid active />}
-              {view === "artists" && <ArtistGrid active />}
-              {view === "genres" && <GenreList active />}
+              {view === "albums" && <AlbumGrid active onDetailChange={setIsDetailView} />}
+              {view === "artists" && <ArtistGrid active onDetailChange={setIsDetailView} />}
+              {view === "genres" && <GenreList active onDetailChange={setIsDetailView} />}
             </motion.div>
           )}
         </AnimatePresence>

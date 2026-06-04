@@ -1,6 +1,6 @@
 import { useState, useEffect, useDeferredValue, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useGenres } from "../../hooks/useGenres";
+import { useGenres, GenreSortBy } from "../../hooks/useGenres";
 import { useArtwork } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
 import { useToastStore } from "../../store/toastStore";
@@ -10,6 +10,7 @@ import { Genre } from "../../types/genre";
 
 interface GenreListProps {
   active?: boolean;
+  onDetailChange?: (isDetail: boolean) => void;
 }
 
 function GenreRow({
@@ -202,10 +203,11 @@ function GenreView({ genre, onBack }: { genre: Genre; onBack: () => void }) {
   );
 }
 
-export function GenreList({ active = true }: GenreListProps) {
+export function GenreList({ active = true, onDetailChange }: GenreListProps) {
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [sortBy, setSortBy] = useState<GenreSortBy>("name");
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -214,7 +216,9 @@ export function GenreList({ active = true }: GenreListProps) {
     return () => clearTimeout(t);
   }, [deferredSearch]);
 
-  const { data: genres = [], isLoading } = useGenres(debouncedSearch, active);
+  const { data: genres = [], isLoading } = useGenres(debouncedSearch, active, sortBy);
+
+  useEffect(() => { onDetailChange?.(!!selectedGenre); }, [selectedGenre]);
 
   const virtualizer = useVirtualizer({
     count: genres.length,
@@ -245,13 +249,28 @@ export function GenreList({ active = true }: GenreListProps) {
           </h1>
         </div>
 
-        <input
-          type="text"
-          placeholder="Search genres..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-6 transition-colors"
-        />
+        <div className="flex gap-3 mb-6">
+          <input
+            type="text"
+            placeholder="Search genres..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+          />
+          {(["name", "count"] as GenreSortBy[]).map((opt) => (
+            <button
+              key={opt}
+              onClick={() => setSortBy(opt)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors shrink-0 ${
+                sortBy === opt
+                  ? "bg-[var(--accent-a10)] text-[var(--accent)]"
+                  : "text-[#3a3628] hover:text-[#7a7060] bg-[#1f1d18]"
+              }`}
+            >
+              {opt === "name" ? "Name" : "Count"}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-10 py-4">

@@ -117,17 +117,21 @@ export function useAudioPlayer() {
     }
   }
 
-  // ─── True crossfade: load next into idle slot, ramp gains simultaneously ──
+  // ─── True crossfade: load next into idle slot, ramp gains on canplay ────────
   function triggerCrossfade(fromSlot: "A" | "B", fadeDuration: number, timeLeft: number) {
     crossfading.current = true;
+    // Extract refs before null-check so TypeScript preserves narrowing in closures
     const ctx = ctxRef.current;
-    if (!ctx) { crossfading.current = false; return; }
+    const gA = gainARef.current, gB = gainBRef.current;
+    const aA = audioARef.current, aB = audioBRef.current;
+    if (!ctx || !gA || !gB || !aA || !aB) { crossfading.current = false; return; }
 
-    const toSlot   = fromSlot === "A" ? "B" : "A";
-    const fromGain = fromSlot === "A" ? gainARef.current : gainBRef.current;
-    const toGain   = toSlot   === "A" ? gainARef.current : gainBRef.current;
-    const toAudio  = toSlot   === "A" ? audioARef.current : audioBRef.current;
-    if (!fromGain || !toGain || !toAudio) { crossfading.current = false; return; }
+    const toSlot = fromSlot === "A" ? "B" : "A";
+    // All const below are typed as non-null because all refs were checked above
+    const fGain  = fromSlot === "A" ? gA : gB;
+    const tGain  = toSlot   === "A" ? gA : gB;
+    const tAudio = toSlot   === "A" ? aA : aB;
+    const fAudio = fromSlot === "A" ? aA : aB;
 
     const store = usePlayerStore.getState();
     const { queue, shuffledQueue, queueIndex, shuffle } = store;
@@ -136,38 +140,71 @@ export function useAudioPlayer() {
     const nextTrack   = activeQueue[nextIndex];
     if (!nextTrack) { crossfading.current = false; return; }
 
-    // Pre-load next track into idle slot and record the path
-    toAudio.src    = convertFileSrc(nextTrack.path);
-    toAudio.volume = store.volume;
+    // Record when we triggered so we can adjust timing after buffering delay
+    const triggeredAt = ctx.currentTime;
+
+    tAudio.src    = convertFileSrc(nextTrack.path);
+    tAudio.volume = store.volume;
     loadedPathRef.current = nextTrack.path;
 
-    const now = ctx.currentTime;
-    fromGain.gain.cancelScheduledValues(now);
-    fromGain.gain.setValueAtTime(1, now);
-    fromGain.gain.linearRampToValueAtTime(0, now + timeLeft);
-    toGain.gain.cancelScheduledValues(now);
-    toGain.gain.setValueAtTime(0, now);
-    toGain.gain.linearRampToValueAtTime(1, now + fadeDuration);
+    function cleanup() {
+      tAudio.removeEventListener("canplay", onCanPlay);
+      tAudio.removeEventListener("error", onError);
+    }
 
-    ctx.resume().then(() => toAudio.play().catch(console.error));
-
-    xfadeTimer.current = setTimeout(() => {
-      xfadeTimer.current = null;
-      const fromAudio = fromSlot === "A" ? audioARef.current : audioBRef.current;
-      if (fromAudio) { fromAudio.pause(); fromAudio.src = ""; }
-      const ctx2 = ctxRef.current;
-      if (ctx2) {
-        fromGain.gain.cancelScheduledValues(ctx2.currentTime);
-        fromGain.gain.setValueAtTime(1, ctx2.currentTime);
-      }
-      activeSlot.current = toSlot;
-      setDuration(toAudio.duration || 0);
+    function onError() {
+      cleanup();
       crossfading.current = false;
-
-      // Advance store — loadedPathRef already matches the next track so the
-      // [currentTrack] effect will skip the src update correctly.
+      if (xfadeTimer.current) { clearTimeout(xfadeTimer.current); xfadeTimer.current = null; }
+      const c = ctxRef.current;
+      if (c) { fGain.gain.cancelScheduledValues(c.currentTime); fGain.gain.setValueAtTime(1, c.currentTime); }
       usePlayerStore.getState().nextTrack();
-    }, fadeDuration * 1000);
+    }
+
+    function onCanPlay() {
+      cleanup();
+      if (!crossfading.current) return;
+      const c = ctxRef.current;
+      if (!c) return;
+
+      const elapsed        = c.currentTime - triggeredAt;
+      const actualTimeLeft = Math.max(0.05, timeLeft - elapsed);
+      const now = c.currentTime;
+
+      fGain.gain.cancelScheduledValues(now);
+      fGain.gain.setValueAtTime(fGain.gain.value, now);
+      fGain.gain.linearRampToValueAtTime(0, now + actualTimeLeft);
+      tGain.gain.cancelScheduledValues(now);
+      tGain.gain.setValueAtTime(0, now);
+      tGain.gain.linearRampToValueAtTime(1, now + fadeDuration);
+
+      c.resume().then(() =>
+        tAudio.play().catch(() => {
+          crossfading.current = false;
+          if (xfadeTimer.current) { clearTimeout(xfadeTimer.current); xfadeTimer.current = null; }
+          const c2 = ctxRef.current;
+          if (c2) {
+            fGain.gain.cancelScheduledValues(c2.currentTime); fGain.gain.setValueAtTime(1, c2.currentTime);
+            tGain.gain.cancelScheduledValues(c2.currentTime); tGain.gain.setValueAtTime(0, c2.currentTime);
+          }
+          usePlayerStore.getState().nextTrack();
+        })
+      );
+
+      xfadeTimer.current = setTimeout(() => {
+        xfadeTimer.current = null;
+        fAudio.pause(); fAudio.src = "";
+        const c2 = ctxRef.current;
+        if (c2) { fGain.gain.cancelScheduledValues(c2.currentTime); fGain.gain.setValueAtTime(1, c2.currentTime); }
+        activeSlot.current = toSlot;
+        setDuration(tAudio.duration || 0);
+        crossfading.current = false;
+        usePlayerStore.getState().nextTrack();
+      }, fadeDuration * 1000);
+    }
+
+    tAudio.addEventListener("canplay", onCanPlay, { once: true });
+    tAudio.addEventListener("error", onError, { once: true });
   }
 
   // ─── Build Web Audio graph lazily on first play ───────────────────────────

@@ -7,12 +7,27 @@ use rusqlite::Result as SqlResult;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use tauri::State;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
 pub struct DbState(pub Pool<SqliteConnectionManager>);
+
+pub struct DownloadControl {
+    paused: AtomicBool,
+    cancelled: AtomicBool,
+}
+
+impl DownloadControl {
+    fn new() -> Self {
+        Self {
+            paused: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+        }
+    }
+}
 
 /// Extract the primary artist from a collaboration credit.
 /// Handles both spaced separators (" / ", " feat. ", etc.) and the bare "/"
@@ -319,9 +334,18 @@ fn get_tracks_page(
     query: String,
     limit: usize,
     offset: usize,
+    sort_by: Option<String>,
 ) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
     let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid FROM tracks";
+    let order_clause = match sort_by.as_deref() {
+        Some("title") => "ORDER BY LOWER(title)",
+        Some("album") => "ORDER BY album_artist, album",
+        Some("duration_asc") => "ORDER BY duration_secs ASC",
+        Some("duration_desc") => "ORDER BY duration_secs DESC",
+        Some("year") => "ORDER BY year DESC NULLS LAST, album_artist, album",
+        _ => "ORDER BY album_artist, album, disc_number, track_number",
+    };
     let map_row = |row: &rusqlite::Row| {
         Ok(Track {
             path: row.get(0)?,
@@ -346,8 +370,8 @@ fn get_tracks_page(
     let tracks: Vec<Track> = if query.is_empty() {
         let mut stmt = conn
             .prepare(&format!(
-                "{} ORDER BY artist, album, track_number LIMIT ?1 OFFSET ?2",
-                sql_base
+                "{} {} LIMIT ?1 OFFSET ?2",
+                sql_base, order_clause
             ))
             .map_err(|e| e.to_string())?;
         let x = stmt
@@ -359,8 +383,8 @@ fn get_tracks_page(
     } else {
         let pattern = format!("%{}%", query.to_lowercase());
         let mut stmt = conn.prepare(&format!(
-            "{} WHERE LOWER(title) LIKE ?3 OR LOWER(artist) LIKE ?3 OR LOWER(album) LIKE ?3 ORDER BY artist, album, track_number LIMIT ?1 OFFSET ?2",
-            sql_base
+            "{} WHERE LOWER(title) LIKE ?3 OR LOWER(artist) LIKE ?3 OR LOWER(album) LIKE ?3 {} LIMIT ?1 OFFSET ?2",
+            sql_base, order_clause
         )).map_err(|e| e.to_string())?;
         let x = stmt
             .query_map(rusqlite::params![limit, offset, pattern], map_row)
@@ -765,7 +789,10 @@ fn get_artist_banner(app: tauri::AppHandle, artist_name: String) -> Option<Strin
 async fn fetch_artist_images(
     app: tauri::AppHandle,
     state: tauri::State<'_, DbState>,
+    control: tauri::State<'_, DownloadControl>,
 ) -> Result<(), String> {
+    control.paused.store(false, Ordering::Relaxed);
+    control.cancelled.store(false, Ordering::Relaxed);
     use tauri::Emitter;
     use image::imageops::FilterType;
 
@@ -868,7 +895,7 @@ async fn fetch_artist_images(
                         if let Ok(resp) = client.get(url).send().await {
                             if let Ok(bytes) = resp.bytes().await {
                                 if let Ok(img) = image::load_from_memory(&bytes) {
-                                    let img = img.resize_to_fill(400, 400, FilterType::Lanczos3);
+                                    let img = img.resize_to_fill(600, 800, FilterType::Lanczos3);
                                     if let Ok(file) = fs::File::create(&thumb_path) {
                                         let mut buf = std::io::BufWriter::new(file);
                                         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 82);
@@ -899,17 +926,24 @@ async fn fetch_artist_images(
                     if let Some(url) = banner_url {
                         if let Ok(resp) = client.get(url).send().await {
                             if let Ok(bytes) = resp.bytes().await {
-                                if let Ok(img) = image::load_from_memory(&bytes) {
-                                    // 1200×400 fill — consistent 3:1 landscape crop for the banner div
-                                    let img = img.resize_to_fill(1200, 400, FilterType::Lanczos3);
-                                    if let Ok(file) = fs::File::create(&banner_path) {
-                                        let mut buf = std::io::BufWriter::new(file);
-                                        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 82);
-                                        if enc.encode_image(&img).is_ok() {
-                                            cached_something = true;
-                                        }
+                                // Only decode+re-encode if we actually need to scale down.
+                                // Re-encoding a JPEG at 82% introduces a generation of quality loss —
+                                // for small source images (most TheAudioDB fanart) just write raw bytes.
+                                let written = if let Ok(img) = image::load_from_memory(&bytes) {
+                                    if img.width() > 1920 || img.height() > 1920 {
+                                        // Scale down, then re-encode at high quality
+                                        let img = img.resize(1920, 1920, FilterType::Lanczos3);
+                                        if let Ok(file) = fs::File::create(&banner_path) {
+                                            let mut buf = std::io::BufWriter::new(file);
+                                            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 92);
+                                            enc.encode_image(&img).is_ok()
+                                        } else { false }
+                                    } else {
+                                        // Already within bounds — write raw bytes to avoid re-compression loss
+                                        fs::write(&banner_path, &bytes).is_ok()
                                     }
-                                }
+                                } else { false };
+                                if written { cached_something = true; }
                             }
                         }
                     }
@@ -926,6 +960,21 @@ async fn fetch_artist_images(
             // Respect TheAudioDB free-tier rate limit (1 req/s)
             tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         }
+
+        // Check cancel before moving to next artist
+        if control.cancelled.load(Ordering::Relaxed) {
+            let _ = app.emit("artist-images://cancelled", serde_json::json!({}));
+            return Ok(());
+        }
+
+        // Wait while paused (poll every 300ms)
+        while control.paused.load(Ordering::Relaxed) {
+            if control.cancelled.load(Ordering::Relaxed) {
+                let _ = app.emit("artist-images://cancelled", serde_json::json!({}));
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
     }
 
     let _ = app.emit(
@@ -937,6 +986,59 @@ async fn fetch_artist_images(
 }
 
 #[tauri::command]
+fn pause_artist_image_download(control: State<'_, DownloadControl>) -> Result<(), String> {
+    control.paused.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+fn resume_artist_image_download(control: State<'_, DownloadControl>) -> Result<(), String> {
+    control.paused.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_artist_image_download(
+    app: tauri::AppHandle,
+    control: State<'_, DownloadControl>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    control.cancelled.store(true, Ordering::Relaxed);
+    control.paused.store(false, Ordering::Relaxed);
+    // Delete all downloaded artist images and banners
+    let cache_base = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    for dir in &["artist-images", "artist-banners"] {
+        let path = cache_base.join(dir);
+        if path.exists() {
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        }
+    }
+    let _ = app.emit("artist-images://cancelled", serde_json::json!({}));
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_artist_images(app: tauri::AppHandle) -> Result<(), String> {
+    let path = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("artist-images");
+    if path.exists() {
+        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_artist_banners(app: tauri::AppHandle) -> Result<(), String> {
+    let path = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("artist-banners");
+    if path.exists() {
+        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn clear_all_data(
     app: tauri::AppHandle,
     state: tauri::State<'_, DbState>,
@@ -944,8 +1046,12 @@ async fn clear_all_data(
     // Clear all tables
     {
         let conn = state.0.get().map_err(|e| e.to_string())?;
-        conn.execute_batch("DELETE FROM tracks; DELETE FROM books;")
-            .map_err(|e| e.to_string())?;
+        conn.execute_batch(
+            "DELETE FROM tracks;
+             DELETE FROM track_artists WHERE track_path NOT IN (SELECT path FROM tracks);
+             DELETE FROM books;"
+        )
+        .map_err(|e| e.to_string())?;
     }
     // Remove all cache directories
     let cache_base = app.path().app_cache_dir().map_err(|e| e.to_string())?;
@@ -1287,18 +1393,29 @@ fn get_albums_count(state: State<DbState>, query: String) -> Result<usize, Strin
 }
 
 #[tauri::command]
-fn search_albums(state: State<DbState>, query: String) -> Result<Vec<Album>, String> {
+fn search_albums(state: State<DbState>, query: String, sort_by: Option<String>) -> Result<Vec<Album>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
 
+    let order_clause = match sort_by.as_deref() {
+        Some("artist") => "ORDER BY album_artist COLLATE NOCASE, album COLLATE NOCASE",
+        Some("year_desc") => "ORDER BY year DESC NULLS LAST",
+        Some("year_asc") => "ORDER BY year ASC NULLS LAST",
+        _ => "ORDER BY album COLLATE NOCASE",
+    };
+
     let sql = if query.is_empty() {
-        "SELECT album, album_artist as artist, MIN(year) as year, COUNT(*) as track_count, MIN(path) as cover_path
-         FROM tracks GROUP BY album, album_artist ORDER BY album_artist, album".to_string()
+        format!(
+            "SELECT album, album_artist as artist, MIN(year) as year, COUNT(*) as track_count, MIN(path) as cover_path
+             FROM tracks GROUP BY album, album_artist {}",
+            order_clause
+        )
     } else {
         let pattern = format!("%{}%", query.to_lowercase());
         format!(
             "SELECT album, album_artist as artist, MIN(year) as year, COUNT(*) as track_count, MIN(path) as cover_path
              FROM tracks WHERE LOWER(album) LIKE '{pattern}' OR LOWER(album_artist) LIKE '{pattern}'
-             GROUP BY album, album_artist ORDER BY album_artist, album"
+             GROUP BY album, album_artist {}",
+            order_clause
         )
     };
 
@@ -1349,13 +1466,14 @@ fn search_artists(state: State<DbState>, query: String) -> Result<Vec<Artist>, S
                         ) AS cover_path
                  FROM track_artists ta
                  JOIN tracks t ON ta.track_path = t.path";
+    let blocked = "LOWER(ta.artist_name) NOT IN ('various artists', 'va', 'various')";
     let sql = if query.is_empty() {
-        format!("{} GROUP BY ta.artist_name ORDER BY ta.artist_name", base)
+        format!("{} WHERE {} GROUP BY ta.artist_name ORDER BY ta.artist_name", base, blocked)
     } else {
         let pattern = format!("%{}%", query.to_lowercase());
         format!(
-            "{} WHERE LOWER(ta.artist_name) LIKE '{}' GROUP BY ta.artist_name ORDER BY ta.artist_name",
-            base, pattern
+            "{} WHERE {} AND LOWER(ta.artist_name) LIKE '{}' GROUP BY ta.artist_name ORDER BY ta.artist_name",
+            base, blocked, pattern
         )
     };
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -1464,24 +1582,30 @@ fn get_artist_details(state: State<DbState>, artist: String) -> Result<Vec<Artis
 }
 
 #[tauri::command]
-fn search_genres(state: State<DbState>, query: String) -> Result<Vec<Genre>, String> {
+fn search_genres(state: State<DbState>, query: String, sort_by: Option<String>) -> Result<Vec<Genre>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let order_clause = match sort_by.as_deref() {
+        Some("count") => "ORDER BY track_count DESC",
+        _ => "ORDER BY name COLLATE NOCASE",
+    };
     let mut stmt = if query.is_empty() {
-        conn.prepare(
-            "SELECT genre, COUNT(*) as track_count, MIN(path) as cover_path
+        conn.prepare(&format!(
+            "SELECT genre as name, COUNT(*) as track_count, MIN(path) as cover_path
              FROM tracks
              GROUP BY genre
-             ORDER BY genre",
-        )
+             {}",
+            order_clause
+        ))
         .map_err(|e| e.to_string())?
     } else {
         let pattern = format!("%{}%", query.to_lowercase());
         conn.prepare(&format!(
-            "SELECT genre, COUNT(*) as track_count, MIN(path) as cover_path
+            "SELECT genre as name, COUNT(*) as track_count, MIN(path) as cover_path
              FROM tracks
              WHERE LOWER(genre) LIKE '{pattern}'
              GROUP BY genre
-             ORDER BY genre"
+             {}",
+            order_clause
         ))
         .map_err(|e| e.to_string())?
     };
@@ -1548,8 +1672,11 @@ fn get_genre_tracks(
 #[tauri::command]
 fn clear_music_library(state: State<DbState>) -> Result<(), String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-    conn.execute_batch("DELETE FROM tracks; DELETE FROM album_cache;")
-        .map_err(|e| e.to_string())?;
+    conn.execute_batch(
+        "DELETE FROM tracks;
+         DELETE FROM track_artists WHERE track_path NOT IN (SELECT path FROM tracks);"
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1603,6 +1730,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(DbState(pool))
+        .manage(DownloadControl::new())
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             save_tracks,
@@ -1634,6 +1762,11 @@ pub fn run() {
             get_artist_image,
             get_artist_banner,
             fetch_artist_images,
+            pause_artist_image_download,
+            resume_artist_image_download,
+            cancel_artist_image_download,
+            clear_artist_images,
+            clear_artist_banners,
             clear_all_data,
         ])
         .run(tauri::generate_context!())

@@ -12,6 +12,7 @@ const GAP = 24;
 
 interface ArtistGridProps {
   active?: boolean;
+  onDetailChange?: (isDetail: boolean) => void;
 }
 
 function SkeletonCard({ opacity }: { opacity: number }) {
@@ -30,11 +31,14 @@ function calcCardWidth(width: number, cols: number) {
   return Math.floor((width - (cols - 1) * GAP) / cols);
 }
 
-export function ArtistGrid({ active = true }: ArtistGridProps) {
+type ArtistSortBy = "name" | "count";
+
+export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const { isDownloading, completed, total, percent, currentArtist, download } =
+  const [sortBy, setSortBy] = useState<ArtistSortBy>("name");
+  const { isDownloading, isPaused, completed, total, percent, currentArtist, download, pause, resume, cancel } =
     useArtistImageDownload();
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
   const [columns, setColumns] = useState(() => {
@@ -54,7 +58,12 @@ export function ArtistGrid({ active = true }: ArtistGridProps) {
     return () => clearTimeout(t);
   }, [deferredSearch]);
 
-  const { data: artists = [], isLoading } = useArtists(debouncedSearch, active);
+  const { data: rawArtists = [], isLoading } = useArtists(debouncedSearch, active);
+
+  useEffect(() => { onDetailChange?.(!!selectedArtist); }, [selectedArtist]);
+  const artists = sortBy === "count"
+    ? [...rawArtists].sort((a, b) => b.track_count - a.track_count)
+    : rawArtists;
 
   // ResizeObserver
   useEffect(() => {
@@ -157,17 +166,46 @@ export function ArtistGrid({ active = true }: ArtistGridProps) {
               {currentArtist && (
                 <p className="text-[10px] font-mono text-[#3a3628] px-1 pb-1 truncate">{currentArtist}</p>
               )}
+              <div className="flex gap-2 px-1 pb-2">
+                <button
+                  onClick={isPaused ? resume : pause}
+                  className="text-[10px] font-mono px-2.5 py-1 rounded-md bg-[#1f1d18] text-[#7a7060] hover:text-[#c8bfa8] transition-colors"
+                >
+                  {isPaused ? "Resume" : "Pause"}
+                </button>
+                <button
+                  onClick={cancel}
+                  className="text-[10px] font-mono px-2.5 py-1 rounded-md bg-[#1f1d18] text-[#c85858] hover:bg-[#c85858]/10 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        <input
-          type="text"
-          placeholder="Search artists..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-6 transition-colors"
-        />
+        <div className="flex gap-3 mb-6">
+          <input
+            type="text"
+            placeholder="Search artists..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+          />
+          {(["name", "count"] as ArtistSortBy[]).map((opt) => (
+            <button
+              key={opt}
+              onClick={() => setSortBy(opt)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors shrink-0 ${
+                sortBy === opt
+                  ? "bg-[var(--accent-a10)] text-[var(--accent)]"
+                  : "text-[#3a3628] hover:text-[#7a7060] bg-[#1f1d18]"
+              }`}
+            >
+              {opt === "name" ? "Name" : "Count"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Grid */}

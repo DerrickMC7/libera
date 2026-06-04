@@ -16,5 +16,6 @@ export function useArtwork(trackPath: string | undefined, full?: boolean) {
     },
     enabled: !!trackPath,
     staleTime: Infinity,
+    gcTime: 1000 * 60 * 30,
   });
 }
