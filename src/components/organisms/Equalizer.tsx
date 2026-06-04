@@ -42,7 +42,7 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
           </span>
           <button
             onClick={() => setEqEnabled(!eqEnabled)}
-            className={`relative w-9 h-5 rounded-full transition-colors overflow-hidden ${eqEnabled ? "bg-[#d4872a]" : "bg-[#2a2820]"}`}
+            className={`relative w-9 h-5 rounded-full transition-colors overflow-hidden ${eqEnabled ? "bg-[var(--accent)]" : "bg-[#2a2820]"}`}
           >
             <span
               className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${eqEnabled ? "translate-x-4" : ""}`}
@@ -75,7 +75,7 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
                   if (e.key === "Escape") setEditingId(null);
                 }}
                 onBlur={() => setEditingId(null)}
-                className="bg-[#2a2820] text-[#f0ead8] text-xs px-2 py-1 rounded-full outline-none border border-[#d4872a]/40 w-20"
+                className="bg-[#2a2820] text-[#f0ead8] text-xs px-2 py-1 rounded-full outline-none border border-[var(--accent-a40)] w-20"
               />
             ) : (
               <button
@@ -88,7 +88,7 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
                 }}
                 className={`text-xs px-3 py-1 rounded-full transition-colors font-mono ${
                   activePresetId === preset.id
-                    ? "bg-[#d4872a]/20 text-[#d4872a] border border-[#d4872a]/30"
+                    ? "bg-[var(--accent-a20)] text-[var(--accent)] border border-[var(--accent-a30)]"
                     : "bg-[#1f1d18] text-[#7a7060] hover:text-[#c8bfa8] border border-transparent"
                 }`}
               >
@@ -120,9 +120,9 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
                 if (e.key === "Escape") setShowSaveInput(false);
               }}
               placeholder="Preset name"
-              className="bg-[#2a2820] text-[#f0ead8] text-xs px-2 py-1 rounded-full outline-none border border-[#d4872a]/40 w-24 placeholder-[#3a3628]"
+              className="bg-[#2a2820] text-[#f0ead8] text-xs px-2 py-1 rounded-full outline-none border border-[var(--accent-a40)] w-24 placeholder-[#3a3628]"
             />
-            <button onClick={handleSave} className="text-[#d4872a] hover:text-[#e8a84c] transition-colors text-xs">✓</button>
+            <button onClick={handleSave} className="text-[var(--accent)] hover:text-[var(--accent-hover)] transition-colors text-xs">✓</button>
             <button onClick={() => setShowSaveInput(false)} className="text-[#3a3628] hover:text-[#7a7060] transition-colors text-xs">✗</button>
           </div>
         ) : (
@@ -157,7 +157,7 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
                   direction: "rtl" as any,
                   width: "100%",
                   height: compact ? "80px" : "100px",
-                  accentColor: "#d4872a",
+                  accentColor: "var(--accent)",
                   appearance: "slider-vertical" as any,
                   WebkitAppearance: "slider-vertical" as any,
                 }}

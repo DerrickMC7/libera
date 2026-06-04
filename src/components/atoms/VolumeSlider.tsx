@@ -96,12 +96,13 @@ export function VolumeSlider({ volume, onVolumeChange }: VolumeSliderProps) {
           step="0.01"
           value={volume}
           onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
-          className="w-full accent-[#d4872a] cursor-pointer h-2 rounded-full"
+          className="w-full volume-range"
+          style={{ "--volume-pct": `${volume * 100}%` } as React.CSSProperties}
         />
         {tooltipVisible && (
           <div
             ref={tooltipRef}
-            className="absolute pointer-events-none bg-[#161410]/95 backdrop-blur-sm text-[#f0ead8] text-xs px-2 py-1 rounded-lg border border-white/10 shadow-lg whitespace-nowrap z-50"
+            className="absolute pointer-events-none bg-[#161410] backdrop-blur-sm text-[#f0ead8] text-xs px-2 py-1 rounded-lg border border-white/10 shadow-lg whitespace-nowrap z-50"
             style={{
               opacity: tooltipOpacity,
               transition: "opacity 0.2s ease",

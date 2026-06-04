@@ -13,7 +13,7 @@ export function RepeatButton({ mode, onClick }: RepeatButtonProps) {
       whileTap={{ scale: 0.92 }}
       onClick={onClick}
       className={`relative transition-colors cursor-pointer ${
-        mode !== "off" ? "text-[#d4872a]" : "text-[#7a7060] hover:text-[#c8bfa8]"
+        mode !== "off" ? "text-[var(--accent)]" : "text-[#7a7060] hover:text-[#c8bfa8]"
       }`}
     >
       {mode === "one" ? (
@@ -26,7 +26,7 @@ export function RepeatButton({ mode, onClick }: RepeatButtonProps) {
         </svg>
       )}
       {mode === "one" && (
-        <span className="absolute -top-1 -right-1 text-[8px] font-mono font-bold text-[#d4872a]">
+        <span className="absolute -top-1 -right-1 text-[8px] font-mono font-bold text-[var(--accent)]">
           1
         </span>
       )}

@@ -16,5 +16,6 @@ export interface Track {
   sample_rate: number | null;
   channels: number | null;
   file_size: number;
+  mbid: string | null;
   artwork_path?: string | null;
 }

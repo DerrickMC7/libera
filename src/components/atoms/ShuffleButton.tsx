@@ -11,7 +11,7 @@ export function ShuffleButton({ active, onClick }: ShuffleButtonProps) {
       whileTap={{ scale: 0.92 }}
       onClick={onClick}
       className={`transition-colors cursor-pointer ${
-        active ? "text-[#d4872a]" : "text-[#7a7060] hover:text-[#c8bfa8]"
+        active ? "text-[var(--accent)]" : "text-[#7a7060] hover:text-[#c8bfa8]"
       }`}
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">

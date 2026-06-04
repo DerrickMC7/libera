@@ -30,7 +30,7 @@ export function AlbumCard({ album, onClick }: AlbumCardProps) {
           </div>
         )}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors duration-150 flex items-center justify-center">
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-10 h-10 rounded-full bg-[#d4872a] flex items-center justify-center shadow-lg">
+          <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-10 h-10 rounded-full bg-[var(--accent)] flex items-center justify-center shadow-lg">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
               <path d="M8 5v14l11-7z" />
             </svg>
@@ -39,7 +39,7 @@ export function AlbumCard({ album, onClick }: AlbumCardProps) {
       </div>
 
       <div className="min-w-0">
-        <p className="text-sm text-[#f0ead8] truncate leading-snug group-hover:text-[#d4872a] transition-colors duration-150">
+        <p className="text-sm text-[#f0ead8] truncate leading-snug group-hover:text-[var(--accent)] transition-colors duration-150">
           {album.album}
         </p>
         <p className="text-xs text-[#7a7060] truncate mt-0.5">

@@ -80,7 +80,7 @@ export function NavRail({ activeSection, onNavigate, disabled }: NavRailProps) {
       </div>
 
       {/* Avatar */}
-      <div className="w-[30px] h-[30px] rounded-full bg-[#2a2820] border border-[#3a3628] flex items-center justify-center text-[11px] font-semibold text-[#c8bfa8] cursor-pointer hover:border-[#d4872a] transition-colors select-none">
+      <div className="w-[30px] h-[30px] rounded-full bg-[#2a2820] border border-[#3a3628] flex items-center justify-center text-[11px] font-semibold text-[#c8bfa8] cursor-pointer hover:border-[var(--accent)] transition-colors select-none">
         D
       </div>
     </div>

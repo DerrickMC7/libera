@@ -14,6 +14,106 @@ use zip::ZipArchive;
 
 pub struct DbState(pub Pool<SqliteConnectionManager>);
 
+/// Extract the primary artist from a collaboration credit.
+/// Handles both spaced separators (" / ", " feat. ", etc.) and the bare "/"
+/// that most tagging software writes (e.g. "Fred again../Baby Keem").
+/// The bare "/" guard requires idx > 2 so band names like "AC/DC" are preserved.
+fn clean_primary_artist(name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() {
+        return "Unknown Artist".to_string();
+    }
+    let lower = name.to_lowercase();
+    // Spaced-separator patterns first (most explicit)
+    for pat in &[" / ", " feat. ", " feat ", " ft. ", " ft ", " featuring ", " with "] {
+        if let Some(idx) = lower.find(pat) {
+            let primary = name[..idx].trim();
+            if !primary.is_empty() {
+                return primary.to_string();
+            }
+        }
+    }
+    // Bare "/" — common in taggers (e.g. "Fred again../Baby Keem").
+    // Only split when the prefix is longer than 2 chars so "AC/DC" is left alone.
+    if let Some(idx) = name.find('/') {
+        if idx > 2 {
+            let primary = name[..idx].trim();
+            if !primary.is_empty() {
+                return primary.to_string();
+            }
+        }
+    }
+    name.to_string()
+}
+
+/// Split "Fred again../Baby Keem" → ["Fred again..", "Baby Keem"].
+/// Both spaced and bare "/" separators handled; "AC/DC" is preserved
+/// because both sides have ≤2 chars.
+fn split_all_artists(name: &str) -> Vec<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return vec![];
+    }
+    // Phase 1: explicit spaced separators
+    let mut parts: Vec<String> = vec![name.to_string()];
+    for sep in &[" / ", " feat. ", " feat ", " ft. ", " ft ", " featuring ", " with "] {
+        parts = parts
+            .into_iter()
+            .flat_map(|p| {
+                let lower = p.to_lowercase();
+                let mut out: Vec<String> = Vec::new();
+                let mut start = 0usize;
+                let mut cursor = 0usize;
+                while let Some(rel) = lower[cursor..].find(sep) {
+                    let abs = cursor + rel;
+                    let piece = p[start..abs].trim().to_string();
+                    if !piece.is_empty() {
+                        out.push(piece);
+                    }
+                    start = abs + sep.len();
+                    cursor = start;
+                }
+                let tail = p[start..].trim().to_string();
+                if !tail.is_empty() {
+                    out.push(tail);
+                }
+                out
+            })
+            .collect();
+    }
+    // Phase 2: bare "/" — split when either side has >2 chars (protects "AC/DC")
+    parts = parts
+        .into_iter()
+        .flat_map(|p| split_on_bare_slash(&p))
+        .collect();
+    parts.into_iter().filter(|s| !s.is_empty()).collect()
+}
+
+fn split_on_bare_slash(name: &str) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+    let mut seg_start = 0usize;
+    for (byte_idx, ch) in name.char_indices() {
+        if ch == '/' {
+            let prefix = name[seg_start..byte_idx].trim();
+            let suffix = name[byte_idx + 1..].trim();
+            let pl = prefix.chars().count();
+            let sl = suffix.chars().count();
+            if pl > 0 && sl > 0 && (pl > 2 || sl > 2) {
+                result.push(prefix.to_string());
+                seg_start = byte_idx + 1;
+            }
+        }
+    }
+    let tail = name[seg_start..].trim();
+    if !tail.is_empty() {
+        result.push(tail.to_string());
+    }
+    if result.is_empty() {
+        result.push(name.to_string());
+    }
+    result
+}
+
 fn initialize_database(conn: &rusqlite::Connection) -> SqlResult<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS tracks (
@@ -33,7 +133,8 @@ fn initialize_database(conn: &rusqlite::Connection) -> SqlResult<()> {
             bitrate         INTEGER,
             sample_rate     INTEGER,
             channels        INTEGER,
-            file_size       INTEGER NOT NULL
+            file_size       INTEGER NOT NULL,
+            mbid            TEXT
         );
         CREATE TABLE IF NOT EXISTS books (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,8 +147,69 @@ fn initialize_database(conn: &rusqlite::Connection) -> SqlResult<()> {
         CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
         CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
         CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
-        CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);",
+        CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
+        CREATE TABLE IF NOT EXISTS track_artists (
+            track_path  TEXT NOT NULL,
+            artist_name TEXT NOT NULL,
+            PRIMARY KEY (track_path, artist_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_track_artists_name ON track_artists(artist_name);
+        CREATE INDEX IF NOT EXISTS idx_track_artists_path ON track_artists(track_path);",
     )?;
+    // Non-destructive migration: add mbid column to existing databases
+    let _ = conn.execute("ALTER TABLE tracks ADD COLUMN mbid TEXT", []);
+    // Clean existing album_artist values that contain bare "/" collaboration credits
+    // (e.g. "Fred again../Baby Keem" → "Fred again..").
+    // INSTR is 1-indexed in SQLite, so > 3 means at least 3 chars before the slash,
+    // which preserves names like "AC/DC" (slash at position 3).
+    let _ = conn.execute(
+        "UPDATE tracks
+         SET album_artist = TRIM(SUBSTR(album_artist, 1, INSTR(album_artist, '/') - 1))
+         WHERE INSTR(album_artist, '/') > 3
+           AND TRIM(SUBSTR(album_artist, 1, INSTR(album_artist, '/') - 1)) != ''",
+        [],
+    );
+    Ok(())
+}
+
+/// One-time migration: populate track_artists from existing tracks.
+/// Skipped on subsequent startups because the table will already have rows.
+fn populate_track_artists(conn: &rusqlite::Connection) -> SqlResult<()> {
+    // Re-reads raw artist+album_artist tags from every file so that collaborators
+    // stored only in album_artist (e.g. "Fred again../Baby Keem") are captured even
+    // if tracks.artist was previously set to just the primary artist.
+    let paths: Vec<String> = conn
+        .prepare("SELECT path FROM tracks")?
+        .query_map([], |r| r.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    conn.execute_batch("BEGIN")?;
+    for path in &paths {
+        let file_path = std::path::PathBuf::from(path);
+        // Gather all unique artists from both tags in the actual file
+        let mut all: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Ok(tagged) = Probe::open(&file_path).and_then(|p| p.read()) {
+            let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
+            let raw_artist = tag.and_then(|t| t.artist().map(|s| s.to_string())).unwrap_or_default();
+            let raw_aa = tag.and_then(|t| t.get_string(&lofty::tag::ItemKey::AlbumArtist).map(|s| s.to_string())).unwrap_or_default();
+            for a in split_all_artists(&raw_artist).into_iter().chain(split_all_artists(&raw_aa)) {
+                all.insert(a);
+            }
+        }
+        // Fallback: use whatever is already in tracks.artist
+        if all.is_empty() {
+            if let Ok(a) = conn.query_row("SELECT artist FROM tracks WHERE path = ?1", rusqlite::params![path], |r| r.get::<_, String>(0)) {
+                for name in split_all_artists(&a) { all.insert(name); }
+            }
+        }
+        for name in all {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO track_artists (track_path, artist_name) VALUES (?1, ?2)",
+                rusqlite::params![path, name],
+            );
+        }
+    }
+    conn.execute_batch("COMMIT")?;
     Ok(())
 }
 
@@ -58,12 +220,12 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
     let mut saved = 0;
     for track in &tracks {
         let result = conn.execute(
-            "INSERT OR IGNORE INTO tracks 
-                (path, title, artist, album, album_artist, genre, year, 
-                track_number, track_total, disc_number, disc_total, 
-                duration_secs, bitrate, sample_rate, channels, file_size)
-            VALUES 
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            "INSERT OR IGNORE INTO tracks
+                (path, title, artist, album, album_artist, genre, year,
+                track_number, track_total, disc_number, disc_total,
+                duration_secs, bitrate, sample_rate, channels, file_size, mbid)
+            VALUES
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 track.path,
                 track.title,
@@ -81,10 +243,18 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
                 track.sample_rate,
                 track.channels,
                 track.file_size,
+                track.mbid,
             ],
         );
         if result.is_ok() {
             saved += 1;
+        }
+        // Keep track_artists in sync: insert one row per contributing artist
+        for artist_name in split_all_artists(&track.artist) {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO track_artists (track_path, artist_name) VALUES (?1, ?2)",
+                rusqlite::params![track.path, artist_name],
+            );
         }
     }
     conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
@@ -95,7 +265,7 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
 fn get_tracks(state: State<DbState>) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
     let mut stmt = conn
-        .prepare("SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size FROM tracks")
+        .prepare("SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid FROM tracks")
         .map_err(|e| format!("Query error: {}", e))?;
     let tracks = stmt
         .query_map([], |row| {
@@ -116,6 +286,7 @@ fn get_tracks(state: State<DbState>) -> Result<Vec<Track>, String> {
                 sample_rate: row.get(13)?,
                 channels: row.get(14)?,
                 file_size: row.get(15)?,
+                mbid: row.get(16)?,
             })
         })
         .map_err(|e| format!("Query error: {}", e))?
@@ -150,7 +321,7 @@ fn get_tracks_page(
     offset: usize,
 ) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-    let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size FROM tracks";
+    let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid FROM tracks";
     let map_row = |row: &rusqlite::Row| {
         Ok(Track {
             path: row.get(0)?,
@@ -169,6 +340,7 @@ fn get_tracks_page(
             sample_rate: row.get(13)?,
             channels: row.get(14)?,
             file_size: row.get(15)?,
+            mbid: row.get(16)?,
         })
     };
     let tracks: Vec<Track> = if query.is_empty() {
@@ -256,6 +428,7 @@ pub struct Track {
     pub sample_rate: Option<u32>,
     pub channels: Option<u8>,
     pub file_size: u64,
+    pub mbid: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -321,21 +494,53 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
                 .to_string_lossy()
                 .to_string()
         });
-    let artist = tag
+    // Capture both raw tags BEFORE any cleaning — collaboration credits may live
+    // in either the artist OR album_artist tag depending on the tagger used.
+    let raw_artist = tag
         .and_then(|t| t.artist().map(|s| s.to_string()))
-        .unwrap_or_else(|| "Unknown Artist".to_string());
+        .unwrap_or_default();
+    let raw_album_artist = tag
+        .and_then(|t| t.get_string(&lofty::tag::ItemKey::AlbumArtist).map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    // `artist` stored in DB = all unique contributors from BOTH tags joined by " / ".
+    // This ensures track_artists can link every collaborator regardless of which tag
+    // the tagger used (e.g. "Fred again.." in TPE1, "Fred again../Baby Keem" in TPE2).
+    let artist = {
+        let mut seen = std::collections::HashSet::new();
+        let mut parts: Vec<String> = Vec::new();
+        for a in split_all_artists(&raw_artist)
+            .into_iter()
+            .chain(split_all_artists(&raw_album_artist))
+        {
+            if seen.insert(a.clone()) {
+                parts.push(a);
+            }
+        }
+        if parts.is_empty() { "Unknown Artist".to_string() } else { parts.join(" / ") }
+    };
+
     let album = tag
         .and_then(|t| t.album().map(|s| s.to_string()))
         .unwrap_or_else(|| "Unknown Album".to_string());
-    let album_artist = tag
-        .and_then(|t| {
-            t.get_string(&lofty::tag::ItemKey::AlbumArtist)
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "Unknown Artist".to_string());
+    // album_artist = cleaned primary artist for grouping
+    let album_artist = if !raw_album_artist.trim().is_empty() {
+        clean_primary_artist(&raw_album_artist)
+    } else if !raw_artist.trim().is_empty() {
+        clean_primary_artist(&raw_artist)
+    } else {
+        "Unknown Artist".to_string()
+    };
     let genre = tag
         .and_then(|t| t.genre().map(|s| s.to_string()))
         .unwrap_or_else(|| "Unknown Genre".to_string());
+    // Read MusicBrainz Artist ID for accurate image lookup and disambiguation
+    let mbid = tag
+        .and_then(|t| {
+            t.get_string(&lofty::tag::ItemKey::MusicBrainzArtistId)
+                .map(|s| s.to_string())
+        })
+        .filter(|s| !s.trim().is_empty());
     let year = tag.and_then(|t| t.year());
     let track_number = tag.and_then(|t| t.track());
     let track_total = tag.and_then(|t| t.track_total());
@@ -363,6 +568,7 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
         sample_rate,
         channels,
         file_size,
+        mbid,
     })
 }
 
@@ -479,6 +685,278 @@ fn get_artwork(app: tauri::AppHandle, track_path: String, full: Option<bool>) ->
         encoder.encode_image(&img).ok()?;
     }
     Some(cache_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn get_artwork_original(app: tauri::AppHandle, track_path: String) -> Option<String> {
+    use image::imageops::FilterType;
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .ok()?
+        .join("artwork")
+        .join("original");
+    fs::create_dir_all(&cache_dir).ok()?;
+
+    let path = PathBuf::from(&track_path);
+    let tagged_file = Probe::open(&path).ok()?.read().ok()?;
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())?;
+    let album = tag.album().map(|s| s.to_string()).unwrap_or_default();
+    let album_artist = tag
+        .get_string(&lofty::tag::ItemKey::AlbumArtist)
+        .map(|s| s.to_string())
+        .or_else(|| tag.artist().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    let hash = album_hash(&album, &album_artist);
+    let cache_path = cache_dir.join(format!("{}.jpg", hash));
+
+    if !cache_path.exists() {
+        let picture = tag.pictures().first()?;
+        let img = image::load_from_memory(picture.data()).ok()?;
+        // Preserve original resolution; only downscale if larger than 1200px
+        let max_px = 1200u32;
+        let img = if img.width() > max_px || img.height() > max_px {
+            img.resize(max_px, max_px, FilterType::Lanczos3)
+        } else {
+            img
+        };
+        let output = fs::File::create(&cache_path).ok()?;
+        let mut buf = std::io::BufWriter::new(output);
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 92);
+        enc.encode_image(&img).ok()?;
+    }
+    Some(cache_path.to_string_lossy().to_string())
+}
+
+fn artist_name_hash(name: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    name.to_lowercase().hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
+#[tauri::command]
+fn get_artist_image(app: tauri::AppHandle, artist_name: String) -> Option<String> {
+    let path = app
+        .path()
+        .app_cache_dir()
+        .ok()?
+        .join("artist-images")
+        .join(format!("{}.jpg", artist_name_hash(&artist_name)));
+    if path.exists() { Some(path.to_string_lossy().to_string()) } else { None }
+}
+
+#[tauri::command]
+fn get_artist_banner(app: tauri::AppHandle, artist_name: String) -> Option<String> {
+    let path = app
+        .path()
+        .app_cache_dir()
+        .ok()?
+        .join("artist-banners")
+        .join(format!("{}.jpg", artist_name_hash(&artist_name)));
+    if path.exists() { Some(path.to_string_lossy().to_string()) } else { None }
+}
+
+#[tauri::command]
+async fn fetch_artist_images(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    use image::imageops::FilterType;
+
+    // Collect artist names + their most common MBID; drop connection before any await
+    let artists: Vec<(String, Option<String>)> = {
+        let conn = state.0.get().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT album_artist,
+                        (SELECT mbid FROM tracks t2
+                         WHERE t2.album_artist = t1.album_artist AND t2.mbid IS NOT NULL
+                         GROUP BY t2.mbid ORDER BY COUNT(*) DESC LIMIT 1) AS top_mbid
+                 FROM tracks t1 GROUP BY album_artist ORDER BY album_artist",
+            )
+            .map_err(|e| e.to_string())?;
+        let result: Vec<(String, Option<String>)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+        result
+    };
+
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artist-images");
+    fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+
+    let banner_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artist-banners");
+    fs::create_dir_all(&banner_dir).map_err(|e| e.to_string())?;
+
+    let total = artists.len();
+    let _ = app.emit("artist-images://started", serde_json::json!({ "total": total }));
+
+    let client = reqwest::Client::builder()
+        .user_agent("Libera/1.0 (music player app)")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    for (i, (name, artist_mbid)) in artists.iter().enumerate() {
+        let thumb_path  = cache_dir.join(format!("{}.jpg", artist_name_hash(name)));
+        let banner_path = banner_dir.join(format!("{}.jpg", artist_name_hash(name)));
+
+        let _ = app.emit(
+            "artist-images://progress",
+            serde_json::json!({ "completed": i, "total": total, "current": name }),
+        );
+
+        let need_thumb  = !thumb_path.exists();
+        let need_banner = !banner_path.exists();
+
+        if need_thumb || need_banner {
+            // One API call per artist covers both thumb and banner fields.
+            // Prefer MBID lookup (exact); fall back to name search with exact-name check.
+            let artist_json: Option<serde_json::Value> = async {
+                if let Some(mbid) = artist_mbid {
+                    let url = format!(
+                        "https://www.theaudiodb.com/api/v1/json/2/artist-mb.php?i={}",
+                        mbid
+                    );
+                    if let Ok(resp) = client.get(&url).send().await {
+                        if let Ok(json) = resp.json::<serde_json::Value>().await {
+                            if json["artists"][0].is_object() {
+                                return Some(json);
+                            }
+                        }
+                    }
+                }
+                let search_url = format!(
+                    "https://www.theaudiodb.com/api/v1/json/2/search.php?s={}",
+                    urlencoding::encode(name)
+                );
+                let resp = client.get(&search_url).send().await.ok()?;
+                let json: serde_json::Value = resp.json().await.ok()?;
+                let returned_name = json["artists"][0]["strArtist"].as_str()?;
+                if returned_name.to_lowercase() != name.to_lowercase() {
+                    return None;
+                }
+                Some(json)
+            }
+            .await;
+
+            let mut cached_something = false;
+
+            if let Some(ref json) = artist_json {
+                let artist = &json["artists"][0];
+
+                // Portrait thumb — used by grid cards (square crop)
+                if need_thumb {
+                    if let Some(url) = artist["strArtistThumb"].as_str().filter(|s| !s.is_empty()) {
+                        if let Ok(resp) = client.get(url).send().await {
+                            if let Ok(bytes) = resp.bytes().await {
+                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                    let img = img.resize_to_fill(400, 400, FilterType::Lanczos3);
+                                    if let Ok(file) = fs::File::create(&thumb_path) {
+                                        let mut buf = std::io::BufWriter::new(file);
+                                        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 82);
+                                        if enc.encode_image(&img).is_ok() {
+                                            cached_something = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Wide banner — used by the artist page header.
+                // Priority: dedicated banner → fan art → fan art 2 → fan art 3.
+                if need_banner {
+                    let banner_url = [
+                        artist["strArtistBanner"].as_str(),
+                        artist["strArtistFanart"].as_str(),
+                        artist["strArtistFanart2"].as_str(),
+                        artist["strArtistFanart3"].as_str(),
+                    ]
+                    .iter()
+                    .copied()
+                    .flatten()
+                    .find(|s| !s.is_empty());
+
+                    if let Some(url) = banner_url {
+                        if let Ok(resp) = client.get(url).send().await {
+                            if let Ok(bytes) = resp.bytes().await {
+                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                    // 1200×400 fill — consistent 3:1 landscape crop for the banner div
+                                    let img = img.resize_to_fill(1200, 400, FilterType::Lanczos3);
+                                    if let Ok(file) = fs::File::create(&banner_path) {
+                                        let mut buf = std::io::BufWriter::new(file);
+                                        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 82);
+                                        if enc.encode_image(&img).is_ok() {
+                                            cached_something = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if cached_something {
+                let _ = app.emit(
+                    "artist-images://cached",
+                    serde_json::json!({ "artist": name }),
+                );
+            }
+
+            // Respect TheAudioDB free-tier rate limit (1 req/s)
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+    }
+
+    let _ = app.emit(
+        "artist-images://progress",
+        serde_json::json!({ "completed": total, "total": total, "current": "" }),
+    );
+    let _ = app.emit("artist-images://done", serde_json::json!({ "total": total }));
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_all_data(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+) -> Result<(), String> {
+    // Clear all tables
+    {
+        let conn = state.0.get().map_err(|e| e.to_string())?;
+        conn.execute_batch("DELETE FROM tracks; DELETE FROM books;")
+            .map_err(|e| e.to_string())?;
+    }
+    // Remove all cache directories
+    let cache_base = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    for dir in &["artwork", "artist-images", "artist-banners", "book-covers"] {
+        // artwork sub-dirs (thumb, full, original) are removed when "artwork" is deleted
+        let path = cache_base.join(dir);
+        if path.exists() {
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 fn md5_simple(input: &str) -> u64 {
@@ -753,7 +1231,7 @@ fn get_album_tracks(
         .prepare(
             "SELECT path, title, artist, album, album_artist, genre, year,
          track_number, track_total, disc_number, disc_total,
-         duration_secs, bitrate, sample_rate, channels, file_size
+         duration_secs, bitrate, sample_rate, channels, file_size, mbid
          FROM tracks WHERE album = ?1 AND album_artist = ?2
          ORDER BY disc_number, track_number",
         )
@@ -777,6 +1255,7 @@ fn get_album_tracks(
                 sample_rate: row.get(13)?,
                 channels: row.get(14)?,
                 file_size: row.get(15)?,
+                mbid: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -859,31 +1338,27 @@ pub struct Genre {
 #[tauri::command]
 fn search_artists(state: State<DbState>, query: String) -> Result<Vec<Artist>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-    let mut stmt = if query.is_empty() {
-        conn.prepare(
-            "SELECT album_artist,
-                    COUNT(DISTINCT album) as album_count,
-                    COUNT(*) as track_count,
-                    MIN(path) as cover_path
-             FROM tracks
-             GROUP BY album_artist
-             ORDER BY album_artist",
-        )
-        .map_err(|e| e.to_string())?
+    // Prefer cover_path from tracks where this artist is the primary album_artist;
+    // fall back to any track they appear on (e.g. featured collaborators).
+    let base = "SELECT ta.artist_name,
+                        COUNT(DISTINCT t.album) AS album_count,
+                        COUNT(*) AS track_count,
+                        COALESCE(
+                            MIN(CASE WHEN t.album_artist = ta.artist_name THEN t.path END),
+                            MIN(t.path)
+                        ) AS cover_path
+                 FROM track_artists ta
+                 JOIN tracks t ON ta.track_path = t.path";
+    let sql = if query.is_empty() {
+        format!("{} GROUP BY ta.artist_name ORDER BY ta.artist_name", base)
     } else {
         let pattern = format!("%{}%", query.to_lowercase());
-        conn.prepare(&format!(
-            "SELECT album_artist,
-                    COUNT(DISTINCT album) as album_count,
-                    COUNT(*) as track_count,
-                    MIN(path) as cover_path
-             FROM tracks
-             WHERE LOWER(album_artist) LIKE '{pattern}'
-             GROUP BY album_artist
-             ORDER BY album_artist"
-        ))
-        .map_err(|e| e.to_string())?
+        format!(
+            "{} WHERE LOWER(ta.artist_name) LIKE '{}' GROUP BY ta.artist_name ORDER BY ta.artist_name",
+            base, pattern
+        )
     };
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let artists = stmt
         .query_map([], |row| {
             Ok(Artist {
@@ -912,13 +1387,15 @@ pub struct ArtistAlbum {
 fn get_artist_details(state: State<DbState>, artist: String) -> Result<Vec<ArtistAlbum>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
 
-    // Get albums for this artist
+    // All albums this artist appears on (primary or featuring)
     let mut album_stmt = conn
         .prepare(
-            "SELECT album, MIN(year), COUNT(*), MIN(path)
-         FROM tracks WHERE album_artist = ?1
-         GROUP BY album
-         ORDER BY MIN(year), album",
+            "SELECT t.album, MIN(t.year), COUNT(*), MIN(t.path)
+             FROM track_artists ta
+             JOIN tracks t ON ta.track_path = t.path
+             WHERE ta.artist_name = ?1
+             GROUP BY t.album
+             ORDER BY MIN(t.year), t.album",
         )
         .map_err(|e| e.to_string())?;
 
@@ -939,11 +1416,13 @@ fn get_artist_details(state: State<DbState>, artist: String) -> Result<Vec<Artis
     for (album_name, year, track_count, cover_path) in albums {
         let mut track_stmt = conn
             .prepare(
-                "SELECT path, title, artist, album, album_artist, genre, year,
-             track_number, track_total, disc_number, disc_total,
-             duration_secs, bitrate, sample_rate, channels, file_size
-             FROM tracks WHERE album_artist = ?1 AND album = ?2
-             ORDER BY disc_number, track_number",
+                "SELECT t.path, t.title, t.artist, t.album, t.album_artist, t.genre, t.year,
+                        t.track_number, t.track_total, t.disc_number, t.disc_total,
+                        t.duration_secs, t.bitrate, t.sample_rate, t.channels, t.file_size, t.mbid
+                 FROM track_artists ta
+                 JOIN tracks t ON ta.track_path = t.path
+                 WHERE ta.artist_name = ?1 AND t.album = ?2
+                 ORDER BY t.disc_number, t.track_number",
             )
             .map_err(|e| e.to_string())?;
 
@@ -966,6 +1445,7 @@ fn get_artist_details(state: State<DbState>, artist: String) -> Result<Vec<Artis
                     sample_rate: row.get(13)?,
                     channels: row.get(14)?,
                     file_size: row.get(15)?,
+                    mbid: row.get(16)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -1031,7 +1511,7 @@ fn get_genre_tracks(
         .prepare(
             "SELECT path, title, artist, album, album_artist, genre, year,
          track_number, track_total, disc_number, disc_total,
-         duration_secs, bitrate, sample_rate, channels, file_size
+         duration_secs, bitrate, sample_rate, channels, file_size, mbid
          FROM tracks WHERE genre = ?1
          ORDER BY artist, album, track_number
          LIMIT ?2 OFFSET ?3",
@@ -1056,6 +1536,7 @@ fn get_genre_tracks(
                 sample_rate: row.get(13)?,
                 channels: row.get(14)?,
                 file_size: row.get(15)?,
+                mbid: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -1116,6 +1597,7 @@ pub fn run() {
         .expect("Failed to create connection pool");
     let conn = pool.get().expect("Failed to get connection");
     initialize_database(&conn).expect("Failed to initialize database");
+    populate_track_artists(&conn).expect("Failed to populate track artists");
     drop(conn);
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1132,6 +1614,7 @@ pub fn run() {
             save_books,
             get_books,
             get_artwork,
+            get_artwork_original,
             get_epub_cover,
             list_epub_contents,
             open_pdf_viewer,
@@ -1148,6 +1631,10 @@ pub fn run() {
             clear_music_library,
             clear_books_library,
             clear_artwork_cache,
+            get_artist_image,
+            get_artist_banner,
+            fetch_artist_images,
+            clear_all_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

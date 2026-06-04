@@ -1,4 +1,4 @@
-interface Props {
+﻿interface Props {
   name: string;
   description?: string;
 }
@@ -12,7 +12,7 @@ export function UnderConstruction({ name, description }: Props) {
           height="48"
           viewBox="0 0 24 24"
           fill="none"
-          className="text-[#d4872a] opacity-60"
+          className="text-[var(--accent)] opacity-60"
         >
           <path
             d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
@@ -24,7 +24,7 @@ export function UnderConstruction({ name, description }: Props) {
         </svg>
 
         <div className="text-center">
-          <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-2">
+          <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-2">
             Under Construction
           </p>
           <h2
@@ -43,7 +43,7 @@ export function UnderConstruction({ name, description }: Props) {
           {[0, 1, 2].map((i) => (
             <span
               key={i}
-              className="w-1.5 h-1.5 rounded-full bg-[#d4872a] opacity-40"
+              className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] opacity-40"
               style={{ animationDelay: `${i * 0.2}s` }}
             />
           ))}
@@ -52,3 +52,4 @@ export function UnderConstruction({ name, description }: Props) {
     </div>
   );
 }
+

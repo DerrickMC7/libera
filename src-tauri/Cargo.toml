@@ -28,3 +28,5 @@ zip = "2"
 urlencoding = "2"
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["time"] }

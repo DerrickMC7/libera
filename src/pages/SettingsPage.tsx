@@ -31,27 +31,34 @@ export function SettingsPage() {
     setCrossfadeDuration, setNormalizeVolume,
   } = useSettingsStore();
 
-  async function handleClearLibrary(type: "music" | "books" | "all") {
+  async function handleClearLibrary(type: "music" | "books" | "all" | "wipe") {
     try {
-      if (type === "music" || type === "all") {
-        await invoke("clear_music_library");
-        queryClient.invalidateQueries({ queryKey: ["tracks-page"] });
-        queryClient.invalidateQueries({ queryKey: ["tracks-count"] });
-        queryClient.invalidateQueries({ queryKey: ["albums"] });
-        queryClient.invalidateQueries({ queryKey: ["artists"] });
-        queryClient.invalidateQueries({ queryKey: ["genres"] });
-      }
-      if (type === "books" || type === "all") {
-        await invoke("clear_books_library");
-        queryClient.invalidateQueries({ queryKey: ["books"] });
-      }
-      if (type === "all") {
-        await invoke("clear_artwork_cache");
+      if (type === "wipe") {
+        await invoke("clear_all_data");
+        queryClient.clear();
+      } else {
+        if (type === "music" || type === "all") {
+          await invoke("clear_music_library");
+          queryClient.invalidateQueries({ queryKey: ["tracks-page"] });
+          queryClient.invalidateQueries({ queryKey: ["tracks-count"] });
+          queryClient.invalidateQueries({ queryKey: ["albums"] });
+          queryClient.invalidateQueries({ queryKey: ["artists"] });
+          queryClient.invalidateQueries({ queryKey: ["genres"] });
+        }
+        if (type === "books" || type === "all") {
+          await invoke("clear_books_library");
+          queryClient.invalidateQueries({ queryKey: ["books"] });
+        }
+        if (type === "all") {
+          await invoke("clear_artwork_cache");
+          queryClient.invalidateQueries({ queryKey: ["artwork"] });
+          queryClient.invalidateQueries({ queryKey: ["artist-image"] });
+        }
       }
       setFeedback("Done!");
       setTimeout(() => setFeedback(null), 2000);
     } catch (e) {
-      setFeedback("Error clearing library");
+      setFeedback("Error clearing data");
       setTimeout(() => setFeedback(null), 2000);
     }
     setConfirmClear(null);
@@ -70,7 +77,7 @@ export function SettingsPage() {
     <div className="flex h-full bg-[#0e0d0b]">
       {/* Sidebar */}
       <div className="w-48 shrink-0 border-r border-white/5 pt-9 px-4">
-        <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-4 px-2">
+        <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-4 px-2">
           Settings
         </p>
         <nav className="flex flex-col gap-0.5">
@@ -80,7 +87,7 @@ export function SettingsPage() {
               onClick={() => setActiveSection(s.id)}
               className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors text-left ${
                 activeSection === s.id
-                  ? "bg-[#d4872a]/10 text-[#d4872a]"
+                  ? "bg-[var(--accent)]/10 text-[var(--accent)]"
                   : "text-[#7a7060] hover:text-[#c8bfa8] hover:bg-white/3"
               }`}
             >
@@ -96,7 +103,7 @@ export function SettingsPage() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-10 pt-9 pb-10">
         {feedback && (
-          <div className="fixed top-4 right-4 bg-[#d4872a] text-white text-xs px-4 py-2 rounded-lg font-mono z-50">
+          <div className="fixed top-4 right-4 bg-[var(--accent)] text-white text-xs px-4 py-2 rounded-lg font-mono z-50">
             {feedback}
           </div>
         )}
@@ -114,6 +121,7 @@ export function SettingsPage() {
                 { id: "music", label: "Clear music library", desc: "Removes all tracks and albums from the database", danger: true },
                 { id: "books", label: "Clear books library", desc: "Removes all books and papers from the database", danger: true },
                 { id: "all", label: "Clear everything", desc: "Removes all content and deletes artwork cache files", danger: true },
+              { id: "wipe", label: "Delete all app data", desc: "Wipes database, all cached images, and artist photos — for a clean uninstall", danger: true },
               ].map((item) => (
                 <div key={item.id} className="flex items-center justify-between p-4 rounded-xl bg-[#161410] border border-white/5">
                   <div>
@@ -168,7 +176,7 @@ export function SettingsPage() {
                       onClick={() => setTheme(t)}
                       className={`flex-1 py-2 rounded-lg text-xs font-mono capitalize transition-colors ${
                         theme === t
-                          ? "bg-[#d4872a]/20 text-[#d4872a] border border-[#d4872a]/30"
+                          ? "bg-[var(--accent-a20)] text-[var(--accent)] border border-[var(--accent-a30)]"
                           : "bg-[#1f1d18] text-[#7a7060] border border-transparent hover:text-[#c8bfa8]"
                       }`}
                     >
@@ -212,7 +220,7 @@ export function SettingsPage() {
                       onClick={() => setLanguage(l.id)}
                       className={`flex-1 py-2 rounded-lg text-xs font-mono transition-colors ${
                         language === l.id
-                          ? "bg-[#d4872a]/20 text-[#d4872a] border border-[#d4872a]/30"
+                          ? "bg-[var(--accent-a20)] text-[var(--accent)] border border-[var(--accent-a30)]"
                           : "bg-[#1f1d18] text-[#7a7060] border border-transparent hover:text-[#c8bfa8]"
                       }`}
                     >
@@ -242,9 +250,9 @@ export function SettingsPage() {
                 </div>
                 <button
                   onClick={() => setAutoplay(!autoplay)}
-                  className={`relative w-9 h-5 rounded-full transition-colors ${autoplay ? "bg-[#d4872a]" : "bg-[#2a2820]"}`}
+                  className={`relative w-9 h-5 rounded-full transition-colors overflow-hidden ${autoplay ? "bg-[var(--accent)]" : "bg-[#2a2820]"}`}
                 >
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${autoplay ? "translate-x-[18px]" : "translate-x-0.5"}`} />
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${autoplay ? "translate-x-4" : ""}`} />
                 </button>
               </div>
 
@@ -256,9 +264,9 @@ export function SettingsPage() {
                 </div>
                 <button
                   onClick={() => setNormalizeVolume(!normalizeVolume)}
-                  className={`relative w-9 h-5 rounded-full transition-colors ${normalizeVolume ? "bg-[#d4872a]" : "bg-[#2a2820]"}`}
+                  className={`relative w-9 h-5 rounded-full transition-colors overflow-hidden ${normalizeVolume ? "bg-[var(--accent)]" : "bg-[#2a2820]"}`}
                 >
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${normalizeVolume ? "translate-x-[18px]" : "translate-x-0.5"}`} />
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${normalizeVolume ? "translate-x-4" : ""}`} />
                 </button>
               </div>
 
@@ -269,7 +277,7 @@ export function SettingsPage() {
                     <p className="text-sm text-[#f0ead8]">Crossfade</p>
                     <p className="text-xs text-[#3a3628] mt-0.5">Smooth transition between tracks</p>
                   </div>
-                  <span className="text-xs font-mono text-[#d4872a]">
+                  <span className="text-xs font-mono text-[var(--accent)]">
                     {crossfadeDuration === 0 ? "Off" : `${crossfadeDuration}s`}
                   </span>
                 </div>
@@ -280,7 +288,7 @@ export function SettingsPage() {
                   step="1"
                   value={crossfadeDuration}
                   onChange={(e) => setCrossfadeDuration(parseInt(e.target.value))}
-                  className="w-full accent-[#d4872a]"
+                  className="w-full accent-[var(--accent)]"
                 />
                 <div className="flex justify-between mt-1">
                   <span className="text-[9px] font-mono text-[#3a3628]">Off</span>
@@ -313,7 +321,7 @@ export function SettingsPage() {
               {SHORTCUTS.map((s) => (
                 <div key={s.key} className="flex items-center justify-between px-4 py-3 rounded-lg hover:bg-[#161410] transition-colors">
                   <span className="text-sm text-[#c8bfa8]">{s.action}</span>
-                  <kbd className="text-xs font-mono bg-[#2a2820] text-[#d4872a] px-2.5 py-1 rounded-md border border-white/8">
+                  <kbd className="text-xs font-mono bg-[#2a2820] text-[var(--accent)] px-2.5 py-1 rounded-md border border-white/8">
                     {s.key}
                   </kbd>
                 </div>

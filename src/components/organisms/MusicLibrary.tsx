@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { VirtualItem } from "@tanstack/react-virtual";
 import { useQueryClient } from "@tanstack/react-query";
@@ -9,7 +10,7 @@ import { TrackRow } from "../molecules/TrackRow";
 import { Track } from "../../types/track";
 import { invoke } from "@tauri-apps/api/core";
 import { AlbumGrid } from "./AlbumGrid";
-import { ArtistList } from "./ArtistList";
+import { ArtistGrid } from "./ArtistGrid";
 import { GenreList } from "./GenreList";
 
 const IS_DEMO = !("__TAURI_INTERNALS__" in window);
@@ -47,6 +48,7 @@ function SkeletonRow({ opacity }: { opacity: number }) {
 
 export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const [view, setView] = useState<View>("tracks");
+  const [resetKeys, setResetKeys] = useState({ albums: 0, artists: 0, genres: 0 });
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const pagesRef = useRef<Map<number, Track[]>>(new Map());
@@ -203,7 +205,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
       <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
         <div className="flex items-end justify-between mb-7">
           <div>
-            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-1.5">
+            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
               Your Collection
             </p>
             <h1
@@ -226,14 +228,24 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
           {views.map((v) => (
             <button
               key={v}
-              onClick={() => setView(v)}
-              className={`px-4 py-1.5 rounded-full text-xs font-mono tracking-widest uppercase transition-colors ${
-                view === v
-                  ? "bg-[#d4872a]/15 text-[#d4872a]"
-                  : "text-[#3a3628] hover:text-[#7a7060]"
+              onClick={() => {
+                setView(v);
+                if (v === "albums") setResetKeys((k) => ({ ...k, albums: k.albums + 1 }));
+                else if (v === "artists") setResetKeys((k) => ({ ...k, artists: k.artists + 1 }));
+                else if (v === "genres") setResetKeys((k) => ({ ...k, genres: k.genres + 1 }));
+              }}
+              className={`relative px-4 py-1.5 rounded-full text-xs font-mono tracking-widest uppercase transition-colors ${
+                view === v ? "text-[var(--accent)]" : "text-[#3a3628] hover:text-[#7a7060]"
               }`}
             >
-              {v}
+              {view === v && (
+                <motion.span
+                  layoutId="music-tab-indicator"
+                  className="absolute inset-0 rounded-full bg-[var(--accent-a10)]"
+                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10">{v}</span>
             </button>
           ))}
         </div>
@@ -246,7 +258,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
               placeholder="Search tracks, artists, albums..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 mb-6 transition-colors"
+              className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-6 transition-colors"
             />
             <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
               <span>Title</span>
@@ -259,73 +271,90 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
       </div>
 
       {/* Body */}
-      <div className={`flex-1 overflow-hidden ${view === "albums" ? "block" : "hidden"}`}>
-        <AlbumGrid active={view === "albums"} />
-      </div>
+      <div className="flex-1 min-h-0 relative overflow-hidden">
 
-      <div className={`flex-1 overflow-hidden ${view === "artists" ? "block" : "hidden"}`}>
-        <ArtistList active={view === "artists"} />
-      </div>
-
-      <div className={`flex-1 overflow-hidden ${view === "genres" ? "block" : "hidden"}`}>
-        <GenreList active={view === "genres"} />
-      </div>
-
-      {view === "tracks" && (
-        <div
-          ref={scrollRef}
-          className="flex-1 overflow-y-auto px-10 py-4"
-          onScroll={handleScroll}
+        {/* Tracks: always mounted so the virtualizer keeps its scroll element reference */}
+        <motion.div
+          animate={{ opacity: view === "tracks" ? 1 : 0, y: view === "tracks" ? 0 : 8 }}
+          transition={{ duration: 0.15 }}
+          className="absolute inset-0 flex flex-col"
+          style={{ pointerEvents: view === "tracks" ? "auto" : "none" }}
         >
-          {!isPending && totalCount === 0 && (
-            <div className="flex flex-col items-center justify-center mt-32 gap-3">
-              <p className="text-[#3a3628] text-sm">Your library is empty</p>
-              <p className="text-[#3a3628] text-xs">
-                Click "Add folder" to scan your music
-              </p>
-            </div>
-          )}
+          <div
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto px-10 py-4"
+            onScroll={handleScroll}
+          >
+            {!isPending && totalCount === 0 && (
+              <div className="flex flex-col items-center justify-center mt-32 gap-3">
+                <p className="text-[#3a3628] text-sm">Your library is empty</p>
+                <p className="text-[#3a3628] text-xs">
+                  Click "Add folder" to scan your music
+                </p>
+              </div>
+            )}
+            {totalCount > 0 && (
+              <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+                {virtualizer.getVirtualItems().map((virtualItem: VirtualItem) => {
+                  const index = virtualItem.index;
+                  const track = getTrack(index);
+                  const isSkeleton = index >= totalCount || !track;
+                  const skeletonOpacity =
+                    index >= totalCount
+                      ? Math.max(0, 1 - (index - totalCount) * 0.08)
+                      : 1;
+                  return (
+                    <div
+                      key={virtualItem.key}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        transform: `translateY(${virtualItem.start}px)`,
+                      }}
+                    >
+                      {isSkeleton ? (
+                        <SkeletonRow opacity={skeletonOpacity} />
+                      ) : (
+                        <TrackRow
+                          track={track}
+                          index={index}
+                          isActive={currentTrack?.path === track.path}
+                          onClick={() => handlePlay(index)}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </motion.div>
 
-          {totalCount > 0 && (
-            <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
-              {virtualizer.getVirtualItems().map((virtualItem: VirtualItem) => {
-                const index = virtualItem.index;
-                const track = getTrack(index);
-                const isSkeleton = index >= totalCount || !track;
-                const skeletonOpacity =
-                  index >= totalCount
-                    ? Math.max(0, 1 - (index - totalCount) * 0.08)
-                    : 1;
-
-                return (
-                  <div
-                    key={virtualItem.key}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      transform: `translateY(${virtualItem.start}px)`,
-                    }}
-                  >
-                    {isSkeleton ? (
-                      <SkeletonRow opacity={skeletonOpacity} />
-                    ) : (
-                      <TrackRow
-                        track={track}
-                        index={index}
-                        isActive={currentTrack?.path === track.path}
-                        isScrolling={isScrollingRef.current}
-                        onClick={() => handlePlay(index)}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+        {/* Albums / Artists / Genres: AnimatePresence for sequential transitions */}
+        <AnimatePresence mode="wait">
+          {view !== "tracks" && (
+            <motion.div
+              key={
+                view === "albums" ? `albums-${resetKeys.albums}`
+                : view === "artists" ? `artists-${resetKeys.artists}`
+                : `genres-${resetKeys.genres}`
+              }
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15 }}
+              className="absolute inset-0 overflow-hidden"
+            >
+              {view === "albums" && <AlbumGrid active />}
+              {view === "artists" && <ArtistGrid active />}
+              {view === "genres" && <GenreList active />}
+            </motion.div>
           )}
-        </div>
-      )}
+        </AnimatePresence>
+
+      </div>
     </div>
   );
 }

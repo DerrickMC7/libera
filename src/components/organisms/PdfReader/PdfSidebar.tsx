@@ -1,4 +1,4 @@
-import { TocItem } from "../../../hooks/usePdfDocument";
+﻿import { TocItem } from "../../../hooks/usePdfDocument";
 
 interface PdfSidebarProps {
   toc: TocItem[];
@@ -50,7 +50,7 @@ function TocNode({
         disabled={!item.pageNumber}
         className={`w-full text-left px-4 py-1.5 text-[12px] transition-colors leading-snug ${
           isActive
-            ? "text-[#d4872a] bg-[#d4872a]/8"
+            ? "text-[var(--accent)] bg-[var(--accent)]/8"
             : "text-[#7a7060] hover:text-[#c8bfa8] hover:bg-white/3"
         } ${!item.pageNumber ? "opacity-40 cursor-default" : "cursor-pointer"}`}
         style={{ paddingLeft: `${16 + indent}px`, fontFamily: "Georgia, serif" }}
