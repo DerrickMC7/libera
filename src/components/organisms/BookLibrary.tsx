@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { useBooks, useScanBooks } from "../../hooks/useBooks";
 import { Button } from "../atoms/Button";
 import { BookRow } from "../molecules/BookRow";
@@ -58,7 +58,7 @@ export function BookLibrary() {
       <div className="px-10 pt-9 pb-0 sticky top-0 bg-[#0e0d0b] z-10">
         <div className="flex items-end justify-between mb-7">
           <div>
-            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-1.5">
+            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
               Your Collection
             </p>
             <h1
@@ -81,7 +81,7 @@ export function BookLibrary() {
           placeholder="Search books..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 mb-6 transition-colors"
+          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)]/40 mb-6 transition-colors"
         />
 
         {/* Column headers */}

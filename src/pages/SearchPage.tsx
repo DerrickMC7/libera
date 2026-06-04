@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { useTracksCount, useTracksPage } from "../hooks/useLibrary";
 import { useBooks } from "../hooks/useBooks";
 import { usePlayerStore } from "../store/playerStore";
@@ -36,7 +36,7 @@ export function SearchPage() {
       {/* Header */}
       <div className="px-10 pt-9 pb-0 sticky top-0 bg-[#0e0d0b] z-10">
         <div className="mb-7">
-          <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-1.5">
+          <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
             Explore
           </p>
           <h1
@@ -52,7 +52,7 @@ export function SearchPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
-            className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-3 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 transition-colors"
+            className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-3 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)]/40 transition-colors"
           />
         </div>
       </div>
@@ -75,7 +75,7 @@ export function SearchPage() {
         {tracks.length > 0 && (
           <div className="mb-8">
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#3a3628] mb-3 px-4">
-              Music — {trackCount} results
+              Music â€” {trackCount} results
             </p>
             <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628] mb-1">
               <span>Title</span>
@@ -99,7 +99,7 @@ export function SearchPage() {
         {filteredBooks.length > 0 && (
           <div>
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#3a3628] mb-3 px-4">
-              Books & Papers — {filteredBooks.length} results
+              Books & Papers â€” {filteredBooks.length} results
             </p>
             <div className="grid grid-cols-[1fr_80px_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628] mb-1">
               <span>Title</span>

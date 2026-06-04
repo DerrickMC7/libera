@@ -54,12 +54,7 @@ export function Shell() {
               )}
               {activeSection === "books" && <BookLibrary />}
               {activeSection === "search" && <SearchPage />}
-              {activeSection === "settings" && (
-                <UnderConstruction
-                  name="Settings"
-                  description="App preferences, themes, and equalizer configuration — coming soon."
-                />
-              )}
+              {activeSection === "settings" && <SettingsPage />}
             </motion.div>
           </AnimatePresence>
         </div>

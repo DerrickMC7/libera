@@ -1,11 +1,117 @@
 @import "tailwindcss";
 @import "pdfjs-dist/web/pdf_viewer.css";
 
+/* ─── Accent color tokens (updated by ThemeProvider) ─────────────── */
+:root {
+  --accent:      #d4872a;
+  --accent-hover:#e8a84c;
+  --accent-a08:  rgba(212,135,42,0.08);
+  --accent-a10:  rgba(212,135,42,0.10);
+  --accent-a12:  rgba(212,135,42,0.12);
+  --accent-a20:  rgba(212,135,42,0.20);
+  --accent-a30:  rgba(212,135,42,0.30);
+  --accent-a40:  rgba(212,135,42,0.40);
+}
+
+/* ─── Scrollbar — dark mode (default) ────────────────────────────── */
+::-webkit-scrollbar              { width: 6px; height: 6px; }
+::-webkit-scrollbar-track        { background: transparent; }
+::-webkit-scrollbar-thumb        { background: rgba(255,255,255,0.10); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: rgba(255,255,255,0.18); }
+
+/* ─── Scrollbar — light mode ──────────────────────────────────────── */
+[data-theme="light"] ::-webkit-scrollbar-thumb       { background: rgba(0,0,0,0.15); }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.28); }
+
+/* ─── Light theme — background overrides ─────────────────────────── */
+[data-theme="light"] .bg-\[\#0e0d0b\]  { background-color: #f5f0e8 !important; }
+[data-theme="light"] .bg-\[\#161410\]  { background-color: #ece7dd !important; }
+[data-theme="light"] .bg-\[\#1f1d18\]  { background-color: #e2dcd0 !important; }
+[data-theme="light"] .bg-\[\#1a1814\]  { background-color: #e8e2d6 !important; }
+[data-theme="light"] .bg-\[\#2a2820\]  { background-color: #d6cfc1 !important; }
+[data-theme="light"] .bg-\[\#1c1a16\]  { background-color: #eae5db !important; }
+
+/* ─── Light theme — hover background overrides ───────────────────── */
+[data-theme="light"] .hover\:bg-\[\#1f1d18\]:hover { background-color: #d8d2c6 !important; }
+[data-theme="light"] .hover\:bg-\[\#2a2820\]:hover  { background-color: #cdc7ba !important; }
+[data-theme="light"] .hover\:bg-\[\#161410\]:hover  { background-color: #e0dace !important; }
+
+/* ─── Light theme — text overrides ───────────────────────────────── */
+[data-theme="light"] .text-\[\#faf8f2\] { color: #1c1814 !important; }
+[data-theme="light"] .text-\[\#f0ead8\] { color: #2a2218 !important; }
+[data-theme="light"] .text-\[\#c8bfa8\] { color: #4c4438 !important; }
+[data-theme="light"] .text-\[\#7a7060\] { color: #6e6454 !important; }
+[data-theme="light"] .text-\[\#3a3628\] { color: #8e8474 !important; }
+[data-theme="light"] .text-\[\#2a2820\] { color: #a09890 !important; }
+[data-theme="light"] .text-white        { color: #1c1814 !important; }
+
+/* ─── Light theme — border overrides ─────────────────────────────── */
+[data-theme="light"] .border-r { border-color: rgba(0,0,0,0.08) !important; }
+[data-theme="light"] .border-t { border-color: rgba(0,0,0,0.08) !important; }
+[data-theme="light"] .border-b { border-color: rgba(0,0,0,0.08) !important; }
+
+/* ─── Light theme — player bar ────────────────────────────────────── */
+[data-theme="light"] .fixed.bottom-0 {
+  background-color: #ece7dd !important;
+  border-color: rgba(0,0,0,0.08) !important;
+}
+
+/* ─── Volume slider — fully custom, theme-aware ─────────────────────── */
+.volume-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--accent)           0%,
+    var(--accent)           var(--volume-pct, 25%),
+    rgba(255,255,255,0.12)  var(--volume-pct, 25%),
+    rgba(255,255,255,0.12)  100%
+  );
+  cursor: pointer;
+  outline: none;
+  display: block;
+  width: 100%;
+}
+
+.volume-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: transparent;
+}
+
+.volume-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.volume-range::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+[data-theme="light"] .volume-range {
+  background: linear-gradient(
+    to right,
+    var(--accent)        0%,
+    var(--accent)        var(--volume-pct, 25%),
+    rgba(0,0,0,0.18)     var(--volume-pct, 25%),
+    rgba(0,0,0,0.18)     100%
+  );
+}
+
+/* ─── PDF text layer ───────────────────────────────────────────────── */
 .textLayer ::selection {
-  background: rgba(212, 135, 42, 0.4);
+  background: var(--accent-a40);
 }
 
 .textLayer .highlight {
-  background: rgba(212, 135, 42, 0.35);
+  background: var(--accent-a30);
   border-radius: 2px;
 }

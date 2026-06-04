@@ -1,8 +1,60 @@
+import { useState } from "react";
 import { useArtistDetails } from "../../hooks/useArtists";
 import { useArtwork } from "../../hooks/useArtwork";
+import { useArtistImage } from "../../hooks/useArtistImage";
+import { useArtistBanner } from "../../hooks/useArtistBanner";
 import { usePlayerStore } from "../../store/playerStore";
+import { useToastStore } from "../../store/toastStore";
 import { Artist } from "../../types/artist";
 import { Track } from "../../types/track";
+
+function ArtistTrackRow({ track, idx, isActive, onClick }: {
+  track: Track; idx: number; isActive: boolean; onClick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const { playNext, addToQueue } = usePlayerStore();
+  const { show: showToast } = useToastStore();
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className={`w-full grid grid-cols-[24px_1fr_120px] gap-3 px-3 h-11 items-center rounded-lg cursor-pointer transition-colors ${
+        isActive ? "bg-[var(--accent-a08)]" : "hover:bg-[#1f1d18]"
+      }`}
+    >
+      <span className={`text-xs font-mono self-center ${isActive ? "text-[var(--accent)]" : "text-[#3a3628]"}`}>
+        {track.track_number ?? idx + 1}
+      </span>
+      <span className={`text-sm truncate self-center ${isActive ? "text-[var(--accent)]" : "text-[#f0ead8]"}`} title={track.title}>
+        {track.title}
+      </span>
+      <div className="flex items-center justify-end gap-2 self-center">
+        {hovered && (
+          <>
+            <button onClick={(e) => { e.stopPropagation(); addToQueue(track); showToast(`Added to queue — ${track.title}`); }}
+              title="Add to queue"
+              className="p-2 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 11H7.83l4.88-4.88c.39-.39.39-1.03 0-1.42-.39-.39-1.02-.39-1.41 0l-6.59 6.59c-.39.39-.39 1.02 0 1.41l6.59 6.59c.39.39 1.02.39 1.41 0 .39-.39.39-1.02 0-1.41L7.83 13H19c.55 0 1-.45 1-1s-.45-1-1-1z"/>
+              </svg>
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); playNext(track); showToast(`Playing next — ${track.title}`); }}
+              title="Play next"
+              className="p-2 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/>
+              </svg>
+            </button>
+          </>
+        )}
+        <span className="text-xs font-mono text-[#3a3628] w-10 text-right">
+          {formatDuration(track.duration_secs)}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 interface ArtistViewProps {
   artist: Artist;
@@ -35,7 +87,12 @@ function AlbumCover({ path }: { path: string }) {
 export function ArtistView({ artist, onBack }: ArtistViewProps) {
   const { data: albums = [], isLoading } = useArtistDetails(artist.name);
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
-  const { data: artworkUrl } = useArtwork(artist.cover_path, true);
+  const { data: artistBannerUrl } = useArtistBanner(artist.name);
+  const { data: artistImageUrl } = useArtistImage(artist.name);
+  const { data: fallbackArtworkUrl } = useArtwork(artist.cover_path, true);
+  // Prefer dedicated wide banner, then portrait thumb, then embedded album art
+  const bannerUrl = artistBannerUrl ?? artistImageUrl ?? fallbackArtworkUrl;
+  const isWideBanner = !!artistBannerUrl;
 
   // Flatten all tracks for play all
   const allTracks = albums.flatMap((a) => a.tracks);
@@ -54,11 +111,26 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b] overflow-y-auto">
-      {/* Header */}
-      <div className="px-10 pt-9 pb-6">
+      {/* Artist banner */}
+      <div className="relative w-full h-64 shrink-0 overflow-hidden">
+        {bannerUrl ? (
+          <img
+            src={bannerUrl}
+            alt={artist.name}
+            className={`w-full h-full object-cover ${isWideBanner ? "object-center" : "object-top scale-105"}`}
+            style={{ filter: isWideBanner ? "brightness(0.7)" : "blur(2px) brightness(0.7)" }}
+          />
+        ) : (
+          <div className="w-full h-full bg-[#1a1814]" />
+        )}
+
+        {/* Gradient: dark top (for back button legibility) + fade-to-bg at bottom */}
+        <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/10 to-[#0e0d0b]" />
+
+        {/* Back button */}
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors mb-8 text-xs font-mono"
+          className="absolute top-5 left-8 flex items-center gap-1.5 text-[#c8bfa8]/80 hover:text-[#c8bfa8] transition-colors text-xs font-mono z-10"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
@@ -66,44 +138,35 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
           Artists
         </button>
 
-        {/* Artist hero */}
-        <div className="flex gap-6 items-end mb-8">
-          <div className="w-32 h-32 rounded-full overflow-hidden bg-[#1f1d18] shrink-0 shadow-xl">
-            {artworkUrl ? (
-              <img src={artworkUrl} alt={artist.name} className="w-full h-full object-cover" />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" className="text-[#2a2820]">
-                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-                </svg>
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1 pb-1">
-            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-1">Artist</p>
-            <h1
-              className="text-[32px] leading-none tracking-[-1px] text-[#faf8f2] font-light"
-              style={{ fontFamily: "Fraunces, serif" }}
-            >
-              {artist.name}
-            </h1>
-            <p className="text-[#3a3628] text-xs font-mono mt-1">
-              {artist.album_count} {artist.album_count === 1 ? "album" : "albums"} · {artist.track_count} tracks
-            </p>
-            <button
-              onClick={handlePlayAll}
-              className="mt-3 flex items-center gap-2 bg-[#d4872a] hover:bg-[#e8a84c] text-white text-xs font-mono tracking-widest uppercase px-5 py-2.5 rounded-full transition-colors w-fit"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-              Play all
-            </button>
-          </div>
+        {/* Artist name pinned to bottom of banner */}
+        <div className="absolute bottom-6 left-10 z-10">
+          <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-2">Artist</p>
+          <h1
+            className="text-[48px] leading-none tracking-[-1.5px] text-white font-light drop-shadow-xl"
+            style={{ fontFamily: "Fraunces, serif", textShadow: "0 2px 16px rgba(0,0,0,0.7)" }}
+          >
+            {artist.name}
+          </h1>
         </div>
+      </div>
 
-        <div className="border-t border-white/6" />
+      {/* Stats + play all */}
+      <div className="px-10 pt-5 pb-6">
+        <div className="flex items-center gap-5">
+          <button
+            onClick={handlePlayAll}
+            className="flex items-center gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-mono tracking-widest uppercase px-5 py-2.5 rounded-full transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Play all
+          </button>
+          <p className="text-[#3a3628] text-xs font-mono">
+            {artist.album_count} {artist.album_count === 1 ? "album" : "albums"} · {artist.track_count} tracks
+          </p>
+        </div>
+        <div className="border-t border-white/6 mt-5" />
       </div>
 
       {/* Albums and tracks */}
@@ -139,27 +202,13 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
             {/* Track list */}
             <div className="border-t border-white/5">
               {albumData.tracks.map((track, idx) => (
-                <button
+                <ArtistTrackRow
                   key={track.path}
+                  track={track}
+                  idx={idx}
+                  isActive={currentTrack?.path === track.path}
                   onClick={() => handlePlayTrack(track, albumData.tracks)}
-                  className={`w-full grid grid-cols-[24px_1fr_80px] gap-3 px-3 py-2.5 rounded-lg text-left transition-colors hover:bg-[#1f1d18] ${
-                    currentTrack?.path === track.path ? "bg-[rgba(212,135,42,0.08)]" : ""
-                  }`}
-                >
-                  <span className={`text-xs font-mono self-center ${
-                    currentTrack?.path === track.path ? "text-[#d4872a]" : "text-[#3a3628]"
-                  }`}>
-                    {track.track_number ?? idx + 1}
-                  </span>
-                  <span className={`text-sm truncate self-center ${
-                    currentTrack?.path === track.path ? "text-[#d4872a]" : "text-[#f0ead8]"
-                  }`}>
-                    {track.title}
-                  </span>
-                  <span className="text-xs font-mono text-[#3a3628] self-center text-right">
-                    {formatDuration(track.duration_secs)}
-                  </span>
-                </button>
+                />
               ))}
             </div>
           </div>

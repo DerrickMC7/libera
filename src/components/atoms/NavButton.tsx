@@ -16,7 +16,7 @@ export function NavButton({ icon, active = false, onClick, title }: NavButtonPro
       className={`
         relative w-9 h-9 rounded-lg flex items-center justify-center cursor-pointer transition-colors duration-150
         ${active
-          ? "bg-[rgba(212,135,42,0.12)] text-[#d4872a]"
+          ? "bg-[var(--accent-a12)] text-[var(--accent)]"
           : "text-[#7a7060] hover:bg-[#1f1d18] hover:text-[#c8bfa8]"
         }
       `}
@@ -25,7 +25,7 @@ export function NavButton({ icon, active = false, onClick, title }: NavButtonPro
       {active && (
         <motion.span
           layoutId="nav-indicator"
-          className="absolute -right-[1px] w-[2px] h-4 bg-[#d4872a] rounded-l-sm"
+          className="absolute -right-[1px] w-[2px] h-4 bg-[var(--accent)] rounded-l-sm"
           transition={{ type: "spring", stiffness: 400, damping: 30 }}
         />
       )}

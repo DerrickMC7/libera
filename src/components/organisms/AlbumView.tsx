@@ -83,7 +83,7 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
             transition={{ duration: 0.3, delay: 0.05 }}
             className="flex flex-col gap-1 pb-1"
           >
-            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-1">
+            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1">
               Album
             </p>
             <h1
@@ -101,7 +101,7 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
             {/* Play button */}
             <button
               onClick={handlePlayAll}
-              className="mt-4 flex items-center gap-2 bg-[#d4872a] hover:bg-[#e8a84c] text-white text-xs font-mono tracking-widest uppercase px-5 py-2.5 rounded-full transition-colors w-fit"
+              className="mt-4 flex items-center gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-mono tracking-widest uppercase px-5 py-2.5 rounded-full transition-colors w-fit"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M8 5v14l11-7z" />
@@ -116,10 +116,9 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
       <div className="mx-10 border-t border-white/6 mb-2" />
 
       {/* Column headers */}
-      <div className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-10 pb-2 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
+      <div className="grid grid-cols-[2fr_1fr_120px] gap-4 px-10 pb-2 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
         <span>Title</span>
         <span>Artist</span>
-        <span>Album</span>
         <span className="text-right">Time</span>
       </div>
 
@@ -132,6 +131,7 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
             index={index}
             isActive={currentTrack?.path === track.path}
             onClick={() => handlePlayTrack(index)}
+            showAlbum={false}
           />
         ))}
       </div>

@@ -1,4 +1,4 @@
-interface PdfToolbarProps {
+﻿interface PdfToolbarProps {
   title: string;
   currentPage: number;
   totalPages: number;
@@ -37,7 +37,7 @@ export function PdfToolbar({
       {hasToc && (
         <button
           onClick={onToggleToc}
-          className={`p-1.5 rounded transition-colors ${tocVisible ? "text-[#d4872a]" : "text-[#7a7060] hover:text-[#c8bfa8]"}`}
+          className={`p-1.5 rounded transition-colors ${tocVisible ? "text-[var(--accent)]" : "text-[#7a7060] hover:text-[#c8bfa8]"}`}
           title="Table of contents"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -73,7 +73,7 @@ export function PdfToolbar({
       </button>
 
       {/* Zoom */}
-      <button onClick={onZoomOut} className="p-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors text-lg leading-none">−</button>
+      <button onClick={onZoomOut} className="p-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors text-lg leading-none">âˆ’</button>
       <span className="text-[11px] font-mono text-[#7a7060] w-10 text-center">{Math.round(zoom * 100)}%</span>
       <button onClick={onZoomIn} className="p-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors text-lg leading-none">+</button>
 

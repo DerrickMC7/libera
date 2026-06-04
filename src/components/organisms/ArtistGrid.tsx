@@ -1,11 +1,13 @@
 import { useState, useEffect, useDeferredValue, useRef, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { motion, AnimatePresence } from "framer-motion";
 import { useArtists } from "../../hooks/useArtists";
+import { useArtistImageDownload } from "../../hooks/useArtistImageDownload";
 import { ArtistCard } from "../molecules/ArtistCard";
 import { ArtistView } from "./ArtistView";
 import { Artist } from "../../types/artist";
 
-const CARD_MIN_WIDTH = 160;
+const CARD_MIN_WIDTH = 280; // portrait cards need more room; gives 3 cols at 1080px, 4 on wider screens
 const GAP = 24;
 
 interface ArtistGridProps {
@@ -14,10 +16,8 @@ interface ArtistGridProps {
 
 function SkeletonCard({ opacity }: { opacity: number }) {
   return (
-    <div className="flex flex-col gap-2.5" style={{ opacity }}>
-      <div className="w-full aspect-square rounded-lg bg-[#1f1d18] animate-pulse" />
-      <div className="h-3 rounded bg-[#1f1d18] animate-pulse w-3/4" />
-      <div className="h-2.5 rounded bg-[#1a1814] animate-pulse w-1/2" />
+    <div style={{ opacity }}>
+      <div className="w-full aspect-[3/4] rounded-xl bg-[#1f1d18] animate-pulse" />
     </div>
   );
 }
@@ -34,6 +34,8 @@ export function ArtistGrid({ active = true }: ArtistGridProps) {
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const { isDownloading, completed, total, percent, currentArtist, download } =
+    useArtistImageDownload();
   const [selectedArtist, setSelectedArtist] = useState<Artist | null>(null);
   const [columns, setColumns] = useState(() => {
     const w = window.innerWidth - 52 - 80;
@@ -69,7 +71,8 @@ export function ArtistGrid({ active = true }: ArtistGridProps) {
     return () => observer.disconnect();
   }, [selectedArtist]);
 
-  const cardHeight = cardWidth + 70;
+  // 3:4 portrait ratio; no text below the card (text is overlaid inside)
+  const cardHeight = Math.round(cardWidth * (4 / 3));
   const rowHeight = cardHeight + GAP;
   const rows = Math.ceil(artists.length / columns);
 
@@ -97,27 +100,73 @@ export function ArtistGrid({ active = true }: ArtistGridProps) {
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
       <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="mb-7">
-          <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#d4872a] mb-1.5">
-            Your Collection
-          </p>
-          <h1
-            className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
-            style={{ fontFamily: "Fraunces, serif" }}
+        <div className="flex items-end justify-between mb-7">
+          <div>
+            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
+              Your Collection
+            </p>
+            <h1
+              className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+              style={{ fontFamily: "Fraunces, serif" }}
+            >
+              Artists{" "}
+              <em className="italic text-[#c8bfa8] font-light">
+                {artists.length > 0 ? `· ${artists.length}` : ""}
+              </em>
+            </h1>
+          </div>
+
+          <button
+            onClick={download}
+            disabled={isDownloading}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-mono tracking-widest uppercase transition-colors
+              bg-[#1f1d18] text-[#7a7060] hover:text-[#c8bfa8] hover:bg-[#2a2820]
+              disabled:opacity-40 disabled:cursor-not-allowed border border-white/5"
           >
-            Artists{" "}
-            <em className="italic text-[#c8bfa8] font-light">
-              {artists.length > 0 ? `· ${artists.length}` : ""}
-            </em>
-          </h1>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14l-4-4h3V9h2v4h3l-4 4z" />
+            </svg>
+            {isDownloading ? "Downloading…" : "Download artist images"}
+          </button>
         </div>
+
+        {/* Progress bar */}
+        <AnimatePresence>
+          {isDownloading && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="overflow-hidden mb-4"
+            >
+              <div className="flex items-center gap-3 py-2.5 px-1">
+                <div className="flex-1 h-px bg-[#1f1d18] rounded-full overflow-hidden">
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: "linear-gradient(90deg, var(--accent), var(--accent-hover))", width: `${percent}%` }}
+                    transition={{ ease: "easeOut", duration: 0.3 }}
+                  />
+                </div>
+                <span className="text-[11px] font-mono text-[#7a7060] shrink-0 tabular-nums">
+                  {completed} / {total}
+                </span>
+                <span className="text-[11px] font-mono text-[var(--accent)] shrink-0 tabular-nums">
+                  {percent}%
+                </span>
+              </div>
+              {currentArtist && (
+                <p className="text-[10px] font-mono text-[#3a3628] px-1 pb-1 truncate">{currentArtist}</p>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <input
           type="text"
           placeholder="Search artists..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 mb-6 transition-colors"
+          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-6 transition-colors"
         />
       </div>
 

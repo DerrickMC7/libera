@@ -28,7 +28,7 @@ export function ProgressBar({ progress, duration, onSeek }: ProgressBarProps) {
         }}
       >
         <div
-          className="h-full bg-[#d4872a] rounded-full transition-all"
+          className="h-full bg-[var(--accent)] rounded-full transition-all"
           style={{ width: `${progressPercent}%` }}
         />
       </div>

@@ -52,7 +52,7 @@ export function CacheProgress() {
             <div
               className="absolute inset-0 pointer-events-none"
               style={{
-                background: `radial-gradient(ellipse 60% 40% at 50% 60%, rgba(212,135,42,0.06) 0%, transparent 70%)`,
+                background: `radial-gradient(ellipse 60% 40% at 50% 60%, rgba(var(--accent-rgb, 212,135,42),0.06) 0%, transparent 70%)`,
               }}
             />
 
@@ -92,7 +92,7 @@ export function CacheProgress() {
                   <span className="text-[#3a3628] text-sm ml-1.5">/ {total}</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-[#d4872a] text-sm font-mono">
+                  <span className="text-[var(--accent)] text-sm font-mono">
                     {Math.round(percent)}%
                   </span>
                 </div>
@@ -109,7 +109,7 @@ export function CacheProgress() {
                   <motion.div
                     className="h-full rounded-full"
                     style={{
-                      background: "linear-gradient(90deg, #d4872a, #e8a84c)",
+                      background: "linear-gradient(90deg, var(--accent), var(--accent-hover))",
                       width: `${percent}%`,
                     }}
                     transition={{ ease: "easeOut", duration: 0.2 }}
@@ -153,7 +153,7 @@ export function CacheProgress() {
               <motion.div
                 className="h-full rounded-full"
                 style={{
-                  background: "linear-gradient(90deg, #d4872a, #e8a84c)",
+                  background: "linear-gradient(90deg, var(--accent), var(--accent-hover))",
                   width: `${percent}%`,
                 }}
                 transition={{ ease: "easeOut", duration: 0.2 }}

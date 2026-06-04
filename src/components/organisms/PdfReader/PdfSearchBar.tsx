@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+﻿import { useEffect, useRef } from "react";
 
 interface PdfSearchBarProps {
   query: string;
@@ -49,7 +49,7 @@ export function PdfSearchBar({
           if (e.key === "Escape") onClose();
         }}
         placeholder="Search in document..."
-        className="flex-1 max-w-xs bg-[#2a2820] border border-white/8 rounded-md px-3 py-1.5 text-[13px] text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[#d4872a]/40 transition-colors"
+        className="flex-1 max-w-xs bg-[#2a2820] border border-white/8 rounded-md px-3 py-1.5 text-[13px] text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)]/40 transition-colors"
         style={{ fontFamily: "Georgia, serif" }}
       />
 
