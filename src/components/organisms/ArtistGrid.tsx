@@ -6,6 +6,8 @@ import { useArtistImageDownload } from "../../hooks/useArtistImageDownload";
 import { ArtistCard } from "../molecules/ArtistCard";
 import { ArtistView } from "./ArtistView";
 import { Artist } from "../../types/artist";
+import { useNavigationStore } from "../../store/navigationStore";
+import { Tooltip } from "../atoms/Tooltip";
 
 const CARD_MIN_WIDTH = 280; // portrait cards need more room; gives 3 cols at 1080px, 4 on wider screens
 const GAP = 24;
@@ -52,6 +54,13 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
   });
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function onFocusSearch() { searchInputRef.current?.focus(); }
+    window.addEventListener("focus-search-bar", onFocusSearch);
+    return () => window.removeEventListener("focus-search-bar", onFocusSearch);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(deferredSearch), 300);
@@ -59,8 +68,23 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
   }, [deferredSearch]);
 
   const { data: rawArtists = [], isLoading } = useArtists(debouncedSearch, active);
+  const { pendingArtistName, clearPendingArtist, backTarget, goBack } = useNavigationStore();
+
+  useEffect(() => {
+    if (!pendingArtistName || rawArtists.length === 0) return;
+    const artist = rawArtists.find((a) => a.name === pendingArtistName);
+    if (artist) {
+      setSelectedArtist(artist);
+      clearPendingArtist();
+    }
+  }, [pendingArtistName, rawArtists]);
 
   useEffect(() => { onDetailChange?.(!!selectedArtist); }, [selectedArtist]);
+
+  const handleBack = useCallback(() => {
+    if (backTarget) goBack();
+    else setSelectedArtist(null);
+  }, [backTarget, goBack]);
   const artists = sortBy === "count"
     ? [...rawArtists].sort((a, b) => b.track_count - a.track_count)
     : rawArtists;
@@ -97,12 +121,7 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
   }, [artists, columns]);
 
   if (selectedArtist) {
-    return (
-      <ArtistView
-        artist={selectedArtist}
-        onBack={() => setSelectedArtist(null)}
-      />
-    );
+    return <ArtistView artist={selectedArtist} onBack={handleBack} />;
   }
 
   return (
@@ -185,13 +204,16 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
         </AnimatePresence>
 
         <div className="flex gap-3 mb-6">
-          <input
-            type="text"
-            placeholder="Search artists..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
-          />
+          <Tooltip shortcut="Ctrl+F">
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search artists..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+            />
+          </Tooltip>
           {(["name", "count"] as ArtistSortBy[]).map((opt) => (
             <button
               key={opt}
@@ -253,7 +275,10 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
                       <ArtistCard
                         key={artist.name}
                         artist={artist}
-                        onClick={() => setSelectedArtist(artist)}
+                        onClick={() => {
+                          useNavigationStore.getState().clearBackTarget();
+                          setSelectedArtist(artist);
+                        }}
                       />
                     );
                   })}

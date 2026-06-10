@@ -74,13 +74,48 @@ const BUILT_IN_PRESETS: EqPreset[] = [
 
 export type Theme = "dark" | "light";
 export type Language = "en" | "es";
-export type AccentColor = "amber" | "blue" | "green" | "purple" | "red";
+export type AccentColor = "amber" | "blue" | "green" | "purple" | "red" | "custom";
+
+export const SHORTCUT_IDS = ["play-pause", "seek-forward", "seek-back", "now-playing", "queue", "equalizer", "mute"] as const;
+export type ShortcutId = typeof SHORTCUT_IDS[number];
+
+export const SHORTCUT_LABELS: Record<ShortcutId, string> = {
+  "play-pause":   "Play / Pause",
+  "seek-forward": "Skip forward 5s",
+  "seek-back":    "Skip back 5s",
+  "now-playing":  "Open Now Playing",
+  "queue":        "Open Queue",
+  "equalizer":    "Open Equalizer",
+  "mute":         "Toggle Mute",
+};
+
+export const DEFAULT_KEY_BINDINGS: Record<ShortcutId, string> = {
+  "play-pause":   "Space",
+  "seek-forward": "l",
+  "seek-back":    "j",
+  "now-playing":  "f",
+  "queue":        "q",
+  "equalizer":    "e",
+  "mute":         "m",
+};
+
+export const DEFAULT_KEY_BINDINGS_2: Record<ShortcutId, string> = {
+  "play-pause":   "k",
+  "seek-forward": "",
+  "seek-back":    "",
+  "now-playing":  "",
+  "queue":        "",
+  "equalizer":    "",
+  "mute":         "",
+};
 
 interface SettingsState {
   // Appearance
   theme: Theme;
   language: Language;
   accentColor: AccentColor;
+  customAccentHex: string;
+  savedCustomColors: string[];
 
   // Player
   autoplay: boolean;
@@ -94,9 +129,20 @@ interface SettingsState {
   customPresets: EqPreset[];
 
   // Actions
+  keyBindings: Record<ShortcutId, string>;
+  keyBindings2: Record<ShortcutId, string>;
   setTheme: (theme: Theme) => void;
   setLanguage: (lang: Language) => void;
   setAccentColor: (color: AccentColor) => void;
+  setCustomAccentHex: (hex: string) => void;
+  saveCustomColor: (hex: string) => void;
+  removeCustomColor: (hex: string) => void;
+  setShortcut: (id: ShortcutId, key: string) => void;
+  resetShortcut: (id: ShortcutId) => void;
+  resetAllShortcuts: () => void;
+  setShortcut2: (id: ShortcutId, key: string) => void;
+  resetShortcut2: (id: ShortcutId) => void;
+  resetAllShortcuts2: () => void;
   setAutoplay: (v: boolean) => void;
   setCrossfadeDuration: (v: number) => void;
   setNormalizeVolume: (v: boolean) => void;
@@ -116,6 +162,10 @@ export const useSettingsStore = create<SettingsState>()(
       theme: "dark",
       language: "en",
       accentColor: "amber",
+      customAccentHex: "#8b5cf6",
+      savedCustomColors: [],
+      keyBindings: { ...DEFAULT_KEY_BINDINGS },
+      keyBindings2: { ...DEFAULT_KEY_BINDINGS_2 },
       autoplay: false,
       crossfadeDuration: 0,
       normalizeVolume: false,
@@ -127,6 +177,20 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (theme) => set({ theme }),
       setLanguage: (language) => set({ language }),
       setAccentColor: (accentColor) => set({ accentColor }),
+      setShortcut: (id, key) => set((s) => ({ keyBindings: { ...s.keyBindings, [id]: key } })),
+      resetShortcut: (id) => set((s) => ({ keyBindings: { ...s.keyBindings, [id]: DEFAULT_KEY_BINDINGS[id] } })),
+      resetAllShortcuts: () => set({ keyBindings: { ...DEFAULT_KEY_BINDINGS } }),
+      setShortcut2: (id, key) => set((s) => ({ keyBindings2: { ...s.keyBindings2, [id]: key } })),
+      resetShortcut2: (id) => set((s) => ({ keyBindings2: { ...s.keyBindings2, [id]: DEFAULT_KEY_BINDINGS_2[id] } })),
+      resetAllShortcuts2: () => set({ keyBindings2: { ...DEFAULT_KEY_BINDINGS_2 } }),
+      setCustomAccentHex: (hex) => set({ customAccentHex: hex, accentColor: "custom" }),
+      saveCustomColor: (hex) => set((s) => {
+        if (s.savedCustomColors.includes(hex) || s.savedCustomColors.length >= 7) return s;
+        return { savedCustomColors: [...s.savedCustomColors, hex] };
+      }),
+      removeCustomColor: (hex) => set((s) => ({
+        savedCustomColors: s.savedCustomColors.filter((c) => c !== hex),
+      })),
       setAutoplay: (autoplay) => set({ autoplay }),
       setCrossfadeDuration: (crossfadeDuration) => set({ crossfadeDuration }),
       setNormalizeVolume: (normalizeVolume) => set({ normalizeVolume }),
@@ -178,7 +242,15 @@ export const useSettingsStore = create<SettingsState>()(
         return [...BUILT_IN_PRESETS, ...get().customPresets];
       },
     }),
-    { name: "libera-settings" }
+    {
+      name: "libera-settings",
+      merge: (persisted: unknown, current: SettingsState) => ({
+        ...current,
+        ...(persisted as Partial<SettingsState>),
+        keyBindings:  { ...current.keyBindings,  ...((persisted as any)?.keyBindings  ?? {}) },
+        keyBindings2: { ...current.keyBindings2, ...((persisted as any)?.keyBindings2 ?? {}) },
+      }),
+    }
   )
 );
 

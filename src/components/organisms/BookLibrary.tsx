@@ -1,5 +1,6 @@
-﻿import { useState } from "react";
+﻿import { useState, useEffect, useRef } from "react";
 import { useBooks, useScanBooks } from "../../hooks/useBooks";
+import { Tooltip } from "../atoms/Tooltip";
 import { Button } from "../atoms/Button";
 import { BookRow } from "../molecules/BookRow";
 import { PdfReader } from "./PdfReader/PdfReader";
@@ -13,6 +14,13 @@ export function BookLibrary() {
   const { mutate: scanBooks, isPending } = useScanBooks();
   const [search, setSearch] = useState("");
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function onFocusSearch() { searchInputRef.current?.focus(); }
+    window.addEventListener("focus-search-bar", onFocusSearch);
+    return () => window.removeEventListener("focus-search-bar", onFocusSearch);
+  }, []);
 
   const filtered = books.filter((b) =>
     b.title.toLowerCase().includes(search.toLowerCase())
@@ -76,13 +84,16 @@ export function BookLibrary() {
         </div>
 
         {/* Search */}
-        <input
-          type="text"
-          placeholder="Search books..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)]/40 mb-6 transition-colors"
-        />
+        <Tooltip shortcut="Ctrl+F">
+          <input
+            ref={searchInputRef}
+            type="text"
+            placeholder="Search books..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)]/40 mb-6 transition-colors"
+          />
+        </Tooltip>
 
         {/* Column headers */}
         <div className="grid grid-cols-[1fr_80px_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">

@@ -1,5 +1,6 @@
 import { Logo } from "../atoms/Logo";
 import { NavButton } from "../atoms/NavButton";
+import { Tooltip } from "../atoms/Tooltip";
 
 interface NavRailProps {
   activeSection: string;
@@ -15,7 +16,7 @@ export function NavRail({ activeSection, onNavigate, disabled }: NavRailProps) {
 
   return (
     <div
-      className="flex flex-col items-center py-[18px] gap-0.5 border-r border-white/5 bg-[#0e0d0b] w-[52px]"
+      className="flex flex-col items-center pt-[18px] pb-[10px] gap-0.5 border-r border-white/5 bg-[#0e0d0b] w-[52px]"
       style={{ opacity: disabled ? 0.4 : 1, pointerEvents: disabled ? "none" : "auto" }}
     >
       <Logo />
@@ -52,21 +53,32 @@ export function NavRail({ activeSection, onNavigate, disabled }: NavRailProps) {
           }
         />
         <NavButton
-          active={activeSection === "search"}
-          onClick={() => handleNavigate("search")}
-          title="Search"
+          active={activeSection === "pictures"}
+          onClick={() => handleNavigate("pictures")}
+          title="Pictures"
           icon={
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+              <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
             </svg>
           }
         />
+        <Tooltip label="Search" shortcut="Ctrl+E">
+          <NavButton
+            active={activeSection === "search"}
+            onClick={() => handleNavigate("search")}
+            icon={
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+              </svg>
+            }
+          />
+        </Tooltip>
       </div>
 
       <div className="flex-1" />
 
       {/* Settings */}
-      <div className="flex flex-col items-center gap-2 w-full px-2 mb-2">
+      <div className="flex flex-col items-center gap-2 w-full px-2">
         <NavButton
           active={activeSection === "settings"}
           onClick={() => handleNavigate("settings")}
@@ -79,10 +91,6 @@ export function NavRail({ activeSection, onNavigate, disabled }: NavRailProps) {
         />
       </div>
 
-      {/* Avatar */}
-      <div className="w-[30px] h-[30px] rounded-full bg-[#2a2820] border border-[#3a3628] flex items-center justify-center text-[11px] font-semibold text-[#c8bfa8] cursor-pointer hover:border-[var(--accent)] transition-colors select-none">
-        D
-      </div>
     </div>
   );
 }

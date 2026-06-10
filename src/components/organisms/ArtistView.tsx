@@ -1,70 +1,16 @@
-import { useState } from "react";
 import { useArtistDetails } from "../../hooks/useArtists";
 import { useArtwork } from "../../hooks/useArtwork";
 import { useArtistImage } from "../../hooks/useArtistImage";
 import { useArtistBanner } from "../../hooks/useArtistBanner";
 import { usePlayerStore } from "../../store/playerStore";
-import { useToastStore } from "../../store/toastStore";
+import { useNavigationStore } from "../../store/navigationStore";
+import { TrackRow } from "../molecules/TrackRow";
 import { Artist } from "../../types/artist";
 import { Track } from "../../types/track";
-
-function ArtistTrackRow({ track, idx, isActive, onClick }: {
-  track: Track; idx: number; isActive: boolean; onClick: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const { playNext, addToQueue } = usePlayerStore();
-  const { show: showToast } = useToastStore();
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className={`w-full grid grid-cols-[24px_1fr_120px] gap-3 px-3 h-11 items-center rounded-lg cursor-pointer transition-colors ${
-        isActive ? "bg-[var(--accent-a08)]" : "hover:bg-[#1f1d18]"
-      }`}
-    >
-      <span className={`text-xs font-mono self-center ${isActive ? "text-[var(--accent)]" : "text-[#3a3628]"}`}>
-        {track.track_number ?? idx + 1}
-      </span>
-      <span className={`text-sm truncate self-center ${isActive ? "text-[var(--accent)]" : "text-[#f0ead8]"}`} title={track.title}>
-        {track.title}
-      </span>
-      <div className="flex items-center justify-end gap-2 self-center">
-        {hovered && (
-          <>
-            <button onClick={(e) => { e.stopPropagation(); addToQueue(track); showToast(`Added to queue — ${track.title}`); }}
-              title="Add to queue"
-              className="p-2 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19 11H7.83l4.88-4.88c.39-.39.39-1.03 0-1.42-.39-.39-1.02-.39-1.41 0l-6.59 6.59c-.39.39-.39 1.02 0 1.41l6.59 6.59c.39.39 1.02.39 1.41 0 .39-.39.39-1.02 0-1.41L7.83 13H19c.55 0 1-.45 1-1s-.45-1-1-1z"/>
-              </svg>
-            </button>
-            <button onClick={(e) => { e.stopPropagation(); playNext(track); showToast(`Playing next — ${track.title}`); }}
-              title="Play next"
-              className="p-2 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/>
-              </svg>
-            </button>
-          </>
-        )}
-        <span className="text-xs font-mono text-[#3a3628] w-10 text-right">
-          {formatDuration(track.duration_secs)}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 interface ArtistViewProps {
   artist: Artist;
   onBack: () => void;
-}
-
-function formatDuration(secs: number): string {
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function AlbumCover({ path }: { path: string }) {
@@ -87,6 +33,7 @@ function AlbumCover({ path }: { path: string }) {
 export function ArtistView({ artist, onBack }: ArtistViewProps) {
   const { data: albums = [], isLoading } = useArtistDetails(artist.name);
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
+  const navigateToAlbum = useNavigationStore((s) => s.navigateToAlbum);
   const { data: artistBannerUrl } = useArtistBanner(artist.name);
   const { data: artistImageUrl } = useArtistImage(artist.name);
   const { data: fallbackArtworkUrl } = useArtwork(artist.cover_path, true);
@@ -191,7 +138,11 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
             <div className="flex items-center gap-3 mb-3">
               <AlbumCover path={albumData.cover_path} />
               <div>
-                <p className="text-sm text-[#f0ead8]" style={{ fontFamily: "Georgia, serif" }}>
+                <p
+                  className="text-sm text-[#f0ead8] hover:text-[var(--accent)] cursor-pointer transition-colors"
+                  style={{ fontFamily: "Georgia, serif" }}
+                  onClick={() => navigateToAlbum(albumData.album, artist.name)}
+                >
                   {albumData.album}
                 </p>
                 <p className="text-xs text-[#3a3628] font-mono">
@@ -203,12 +154,15 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
             {/* Track list */}
             <div className="border-t border-white/5">
               {albumData.tracks.map((track, idx) => (
-                <ArtistTrackRow
+                <TrackRow
                   key={track.path}
                   track={track}
-                  idx={idx}
                   isActive={currentTrack?.path === track.path}
                   onClick={() => handlePlayTrack(track, albumData.tracks)}
+                  showTrackNumber
+                  showArtwork={false}
+                  showArtistColumn={false}
+                  trackNumber={track.track_number ?? idx + 1}
                 />
               ))}
             </div>

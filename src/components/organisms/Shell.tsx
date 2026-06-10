@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { NavRail } from "./NavRail";
 import { MusicLibrary } from "./MusicLibrary";
 import { BookLibrary } from "./BookLibrary";
+import { PhotoLibrary } from "./PhotoLibrary";
 import { SearchPage } from "../../pages/SearchPage";
 import { SettingsPage } from "../../pages/SettingsPage";
 import { CacheProgress } from "./CacheProgress";
 import { UnderConstruction } from "./UnderConstruction";
 import { useCacheStore } from "../../store/cacheStore";
+import { useNavigationStore, registerSectionSetter, syncSection } from "../../store/navigationStore";
 
 const pageVariants = {
   initial: { opacity: 0, y: 8 },
@@ -18,6 +20,31 @@ const pageVariants = {
 export function Shell() {
   const [activeSection, setActiveSection] = useState("music");
   const { isProcessing, isFirstTime } = useCacheStore();
+  const pendingArtistName = useNavigationStore((s) => s.pendingArtistName);
+
+  // Register setter so goBack() can drive Shell without prop drilling
+  useEffect(() => { registerSectionSetter(setActiveSection); }, []);
+  // Keep module-level mirror in sync
+  useEffect(() => { syncSection(activeSection); }, [activeSection]);
+
+  useEffect(() => {
+    if (pendingArtistName) setActiveSection("music");
+  }, [pendingArtistName]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.ctrlKey) return;
+      if (e.key === "e") {
+        e.preventDefault();
+        if (!(isProcessing && isFirstTime)) setActiveSection("search");
+      } else if (e.key === "f") {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("focus-search-bar"));
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isProcessing, isFirstTime]);
 
   function handleNavigate(section: string) {
     if (isProcessing && isFirstTime) return;
@@ -25,13 +52,13 @@ export function Shell() {
   }
 
   return (
-    <div className="w-screen h-screen bg-[#0e0d0b] overflow-hidden grid grid-cols-[52px_1fr]">
+    <div className="flex-1 overflow-hidden grid grid-cols-[52px_1fr] min-h-0">
       <NavRail
         activeSection={activeSection}
         onNavigate={handleNavigate}
         disabled={isProcessing && isFirstTime}
       />
-      <main className="overflow-hidden h-full pb-20 flex flex-col">
+      <main className="overflow-hidden h-full flex flex-col">
         <CacheProgress />
 
         <div className="flex-1 overflow-hidden">
@@ -52,6 +79,7 @@ export function Shell() {
                   description="Video library and player — coming in the next major release."
                 />
               )}
+              {activeSection === "pictures" && <PhotoLibrary />}
               {activeSection === "books" && <BookLibrary />}
               {activeSection === "search" && <SearchPage />}
               {activeSection === "settings" && <SettingsPage />}

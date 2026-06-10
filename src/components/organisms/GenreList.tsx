@@ -1,9 +1,11 @@
 import { useState, useEffect, useDeferredValue, useRef } from "react";
+import { Tooltip } from "../atoms/Tooltip";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useGenres, GenreSortBy } from "../../hooks/useGenres";
 import { useArtwork } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
-import { useToastStore } from "../../store/toastStore";
+import { useNavigationStore, syncGenreName } from "../../store/navigationStore";
+import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import { invoke } from "@tauri-apps/api/core";
 import { Track } from "../../types/track";
 import { Genre } from "../../types/genre";
@@ -55,75 +57,6 @@ function GenreRow({
   );
 }
 
-function GenreTrackRow({ track, idx, isActive, onClick }: {
-  track: Track; idx: number; isActive: boolean; onClick: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const { playNext, addToQueue } = usePlayerStore();
-  const { show: showToast } = useToastStore();
-  const { data: artworkUrl } = useArtwork(track.path);
-
-  function formatDuration(secs: number) {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m}:${String(s).padStart(2, "0")}`;
-  }
-
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className={`w-full grid grid-cols-[28px_1fr_1fr_1fr_120px] gap-3 px-3 h-11 items-center rounded-lg cursor-pointer transition-colors ${
-        isActive ? "bg-[var(--accent-a08)]" : "hover:bg-[#1f1d18]"
-      }`}
-    >
-      <div className="w-7 h-7 rounded bg-[#2a2820] shrink-0 overflow-hidden">
-        {artworkUrl ? (
-          <img src={artworkUrl} alt={track.album} className="w-full h-full object-cover" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" className="text-[#3a3628]">
-              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
-            </svg>
-          </div>
-        )}
-      </div>
-      <span className={`text-sm truncate self-center ${isActive ? "text-[var(--accent)]" : "text-[#f0ead8]"}`} title={track.title}>
-        {track.title}
-      </span>
-      <span className="text-sm text-[#7a7060] truncate self-center" title={track.artist}>
-        {track.artist}
-      </span>
-      <span className="text-sm text-[#7a7060] truncate self-center" title={track.album}>
-        {track.album}
-      </span>
-      <div className="flex items-center justify-end gap-2 self-center">
-        {hovered && (
-          <>
-            <button onClick={(e) => { e.stopPropagation(); addToQueue(track); showToast(`Added to queue — ${track.title}`); }}
-              title="Add to queue"
-              className="p-2 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19 11H7.83l4.88-4.88c.39-.39.39-1.03 0-1.42-.39-.39-1.02-.39-1.41 0l-6.59 6.59c-.39.39-.39 1.02 0 1.41l6.59 6.59c.39.39 1.02.39 1.41 0 .39-.39.39-1.02 0-1.41L7.83 13H19c.55 0 1-.45 1-1s-.45-1-1-1z"/>
-              </svg>
-            </button>
-            <button onClick={(e) => { e.stopPropagation(); playNext(track); showToast(`Playing next — ${track.title}`); }}
-              title="Play next"
-              className="p-2 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/>
-              </svg>
-            </button>
-          </>
-        )}
-        <span className="text-xs font-mono text-[#3a3628] w-10 text-right">
-          {formatDuration(track.duration_secs)}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 function GenreView({ genre, onBack }: { genre: Genre; onBack: () => void }) {
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
@@ -184,18 +117,23 @@ function GenreView({ genre, onBack }: { genre: Genre; onBack: () => void }) {
         {isLoading && (
           <div className="flex flex-col gap-1">
             {Array.from({ length: 10 }).map((_, i) => (
-              <div key={i} className="h-10 rounded bg-[#1a1814] animate-pulse mb-1" style={{ opacity: 1 - i * 0.08 }} />
+              <div key={i} className="h-12 rounded bg-[#1a1814] animate-pulse mb-1" style={{ opacity: 1 - i * 0.08 }} />
             ))}
           </div>
         )}
 
+        {tracks.length > 0 && (
+          <TrackRowHeader showArtistColumn showAlbumColumn />
+        )}
+
         {tracks.map((track, idx) => (
-          <GenreTrackRow
+          <TrackRow
             key={track.path}
             track={track}
-            idx={idx}
             isActive={currentTrack?.path === track.path}
             onClick={() => { setQueue(tracks, idx); setIsPlaying(true); }}
+            showArtistColumn
+            showAlbumColumn
           />
         ))}
       </div>
@@ -210,6 +148,14 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
   const [sortBy, setSortBy] = useState<GenreSortBy>("name");
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const { pendingGenreName, clearPendingGenre } = useNavigationStore();
+
+  useEffect(() => {
+    function onFocusSearch() { searchInputRef.current?.focus(); }
+    window.addEventListener("focus-search-bar", onFocusSearch);
+    return () => window.removeEventListener("focus-search-bar", onFocusSearch);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(deferredSearch), 300);
@@ -217,6 +163,16 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
   }, [deferredSearch]);
 
   const { data: genres = [], isLoading } = useGenres(debouncedSearch, active, sortBy);
+
+  // Keep module-level mirror in sync so backTarget can snapshot the open genre
+  useEffect(() => { syncGenreName(selectedGenre?.name ?? null); }, [selectedGenre]);
+
+  // Restore the previously open genre after a back navigation
+  useEffect(() => {
+    if (!pendingGenreName || genres.length === 0) return;
+    const genre = genres.find((g) => g.name === pendingGenreName);
+    if (genre) { setSelectedGenre(genre); clearPendingGenre(); }
+  }, [pendingGenreName, genres]);
 
   useEffect(() => { onDetailChange?.(!!selectedGenre); }, [selectedGenre]);
 
@@ -250,13 +206,16 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
         </div>
 
         <div className="flex gap-3 mb-6">
-          <input
-            type="text"
-            placeholder="Search genres..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
-          />
+          <Tooltip shortcut="Ctrl+F">
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search genres..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+            />
+          </Tooltip>
           {(["name", "count"] as GenreSortBy[]).map((opt) => (
             <button
               key={opt}
