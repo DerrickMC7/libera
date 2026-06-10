@@ -8,6 +8,7 @@ interface PlayerState {
   currentTrack: Track | null;
   isPlaying: boolean;
   volume: number;
+  isMuted: boolean;
   queue: Track[];
   queueIndex: number;
   shuffle: boolean;
@@ -18,13 +19,18 @@ interface PlayerState {
   setCurrentTrack: (track: Track) => void;
   setIsPlaying: (playing: boolean) => void;
   setVolume: (volume: number) => void;
+  toggleMute: () => void;
   setQueue: (tracks: Track[], startIndex: number) => void;
   nextTrack: () => void;
   previousTrack: () => void;
   toggleShuffle: () => void;
   toggleRepeat: () => void;
+  jumpToTrack: (absIdx: number) => void;
+  playFromQueue: (absIdx: number) => void;
   playNext: (track: Track) => void;
   addToQueue: (track: Track) => void;
+  removeFromQueue: (absIdx: number) => void;
+  reorderQueue: (fromAbsIdx: number, toAbsIdx: number) => void;
 }
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -105,6 +111,7 @@ export const usePlayerStore = create<PlayerState>()(
   currentTrack: null,
   isPlaying: false,
   volume: 0.25,
+  isMuted: false,
   queue: [],
   queueIndex: 0,
   shuffle: false,
@@ -115,6 +122,7 @@ export const usePlayerStore = create<PlayerState>()(
   setCurrentTrack: (track) => set({ currentTrack: track }),
   setIsPlaying: (playing) => set({ isPlaying: playing }),
   setVolume: (volume) => set({ volume }),
+  toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
 
   setQueue: (tracks, startIndex) => {
     const { shuffle } = get();
@@ -195,6 +203,49 @@ export const usePlayerStore = create<PlayerState>()(
     set({ repeat: next });
   },
 
+  jumpToTrack: (absIdx: number) => {
+    const { queue, shuffledQueue, shuffle } = get();
+    const activeQueue = shuffle ? shuffledQueue : queue;
+    const track = activeQueue[absIdx];
+    if (!track) return;
+    set({ queueIndex: absIdx, currentTrack: track });
+  },
+
+  // Move a future track to play immediately after the current one,
+  // preserving all other tracks (including manual ones) as upcoming.
+  playFromQueue: (absIdx: number) => {
+    const { queue, shuffledQueue, queueIndex, shuffle, manualQueuePaths } = get();
+    const activeQueue = shuffle ? shuffledQueue : queue;
+    const track = activeQueue[absIdx];
+    if (!track || absIdx <= queueIndex) return;
+
+    const insertAt = queueIndex + 1;
+    const newManualPaths = removeFirstOccurrence(manualQueuePaths, track.path);
+
+    // Already the very next track — just advance
+    if (absIdx === insertAt) {
+      set({ queueIndex: insertAt, currentTrack: track, manualQueuePaths: newManualPaths });
+      return;
+    }
+
+    const moveIn = (arr: Track[], from: number) => {
+      const a = [...arr];
+      const [moved] = a.splice(from, 1);
+      a.splice(insertAt, 0, moved);
+      return a;
+    };
+
+    if (shuffle) {
+      const newShuffled = moveIn(shuffledQueue, absIdx);
+      const mirrorIdx = queue.findIndex((t, i) => i > queueIndex && t.path === track.path);
+      const newQueue = mirrorIdx !== -1 ? moveIn(queue, mirrorIdx) : queue;
+      set({ queue: newQueue, shuffledQueue: newShuffled, queueIndex: insertAt, currentTrack: track, manualQueuePaths: newManualPaths });
+    } else {
+      const newQueue = moveIn(queue, absIdx);
+      set({ queue: newQueue, shuffledQueue: newQueue, queueIndex: insertAt, currentTrack: track, manualQueuePaths: newManualPaths });
+    }
+  },
+
   playNext: (track: Track) => {
     const { queue, shuffledQueue, queueIndex, shuffle, manualQueuePaths } = get();
     // Remove the first system copy if one exists (skip past existing manual copies)
@@ -226,9 +277,51 @@ export const usePlayerStore = create<PlayerState>()(
       manualQueuePaths: [...manualQueuePaths, track.path],
     });
   },
+
+  removeFromQueue: (absIdx: number) => {
+    const { queue, shuffledQueue, queueIndex, shuffle, manualQueuePaths } = get();
+    const activeQueue = shuffle ? shuffledQueue : queue;
+    const trackPath = activeQueue[absIdx]?.path;
+    if (!trackPath) return;
+
+    const cut = (q: Track[], i: number) => [...q.slice(0, i), ...q.slice(i + 1)];
+
+    let newQueue: Track[];
+    let newShuffled: Track[];
+
+    if (shuffle) {
+      newShuffled = cut(shuffledQueue, absIdx);
+      const mirror = queue.findIndex((t, i) => i > queueIndex && t.path === trackPath);
+      newQueue = mirror !== -1 ? cut(queue, mirror) : queue;
+    } else {
+      newQueue = cut(queue, absIdx);
+      newShuffled = newQueue;
+    }
+
+    set({
+      queue: newQueue,
+      shuffledQueue: newShuffled,
+      manualQueuePaths: removeFirstOccurrence(manualQueuePaths, trackPath),
+    });
+  },
+
+  reorderQueue: (fromAbsIdx: number, toAbsIdx: number) => {
+    if (fromAbsIdx === toAbsIdx) return;
+    const { queue, shuffledQueue, shuffle } = get();
+    const src = shuffle ? shuffledQueue : queue;
+    const arr = [...src];
+    const [moved] = arr.splice(fromAbsIdx, 1);
+    // When moving down, original toAbsIdx shifted up by one after the removal
+    arr.splice(fromAbsIdx < toAbsIdx ? toAbsIdx - 1 : toAbsIdx, 0, moved);
+    if (shuffle) {
+      set({ shuffledQueue: arr });
+    } else {
+      set({ queue: arr, shuffledQueue: arr });
+    }
+  },
 }),
 {
   name: "libera-player",
-  partialize: (s) => ({ volume: s.volume, shuffle: s.shuffle, repeat: s.repeat }),
+  partialize: (s) => ({ volume: s.volume, isMuted: s.isMuted, shuffle: s.shuffle, repeat: s.repeat }),
 }
 ));

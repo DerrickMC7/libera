@@ -14,7 +14,8 @@
       {
         "title": "libera",
         "width": 1080,
-        "height": 720
+        "height": 720,
+        "dragDropEnabled": false
       }
     ],
     "security": {

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { usePlayerStore } from "../../store/playerStore";
 import { useArtworkOriginal } from "../../hooks/useArtworkOriginal";
@@ -19,14 +20,26 @@ interface NowPlayingViewProps {
 
 export function NowPlayingView({ open, onClose, progress, duration, seek }: NowPlayingViewProps) {
   const {
-    currentTrack, isPlaying, volume, shuffle, repeat,
-    setIsPlaying, setVolume, nextTrack, previousTrack,
+    currentTrack, isPlaying, volume, isMuted, shuffle, repeat,
+    setIsPlaying, setVolume, toggleMute, nextTrack, previousTrack,
     toggleShuffle, toggleRepeat,
   } = usePlayerStore();
   // Use original-resolution artwork (up to 1200px); fall back to the 300px "full" tier
   // while the original is still being extracted and cached on first open.
-  const { data: originalUrl } = useArtworkOriginal(currentTrack?.path);
-  const { data: fallbackUrl } = useArtwork(currentTrack?.path, true);
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+        (document.activeElement as HTMLElement)?.blur();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
+  const { data: originalUrl } = useArtworkOriginal(currentTrack?.path, true);
+  const { data: fallbackUrl } = useArtwork(currentTrack?.path, true, true);
   const artworkUrl = originalUrl ?? fallbackUrl;
 
   if (!currentTrack) return null;
@@ -103,7 +116,7 @@ export function NowPlayingView({ open, onClose, progress, duration, seek }: NowP
 
               {/* Volume */}
               <div className="flex justify-center">
-                <VolumeSlider volume={volume} onVolumeChange={setVolume} />
+                <VolumeSlider volume={volume} isMuted={isMuted} onVolumeChange={setVolume} onToggleMute={toggleMute} />
               </div>
             </div>
           </motion.div>

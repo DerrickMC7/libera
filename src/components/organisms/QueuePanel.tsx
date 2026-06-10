@@ -2,10 +2,12 @@ import { useRef, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { usePlayerStore } from "../../store/playerStore";
 import { useArtwork } from "../../hooks/useArtwork";
+import { useContextMenuStore } from "../../store/contextMenuStore";
+import { Track } from "../../types/track";
 
-const AUTO_LIMIT    = 60;   // max upcoming auto-loaded tracks shown
-const MANUAL_LIMIT  = 100;  // max upcoming user-added tracks shown
-const HISTORY_LIMIT = 20;   // max past tracks shown when history is revealed
+const AUTO_LIMIT    = 60;
+const MANUAL_LIMIT  = 100;
+const HISTORY_LIMIT = 20;
 
 function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
@@ -15,29 +17,75 @@ function formatDuration(secs: number): string {
 
 function QueueTrack({
   path, title, artist, duration, isActive, isPast, isManual, scrollToMe, onClick,
+  track, onRemove, onDragStart, onDragOver, onDrop, onDragEnd, isDragging, isDragOver,
 }: {
   path: string; title: string; artist: string; duration: number;
   isActive: boolean; isPast: boolean; isManual: boolean;
   scrollToMe: boolean; onClick: () => void;
+  track?: Track;
+  onRemove?: () => void;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDrop?: (e: React.DragEvent) => void;
+  onDragEnd?: () => void;
+  isDragging?: boolean;
+  isDragOver?: boolean;
 }) {
-  const { data: art } = useArtwork(path);
-  const ref = useRef<HTMLButtonElement>(null);
+  const { data: art } = useArtwork(path, false, true);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const showContextMenu = useContextMenuStore((s) => s.show);
 
   useEffect(() => {
-    if (scrollToMe) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (scrollToMe) rowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [scrollToMe]);
 
+  const isDraggable = !!onDragStart;
+
   return (
-    <button
-      ref={ref}
-      onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-left transition-colors ${
-        isActive ? "bg-[var(--accent-a08)]" : "hover:bg-[#1f1d18]"
-      } ${isPast ? "opacity-40" : ""}`}
+    <div
+      ref={rowRef}
+      draggable={isDraggable}
+      onDragStart={isDraggable ? (e) => {
+        e.dataTransfer.setData("text/plain", "");
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart?.(e);
+      } : undefined}
+      onDragEnter={(e) => e.preventDefault()}
+      onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; onDragOver?.(e); }}
+      onDrop={(e) => { e.preventDefault(); onDrop?.(e); }}
+      onDragEnd={onDragEnd}
+      onContextMenu={track ? (e) => { e.preventDefault(); showContextMenu(track, e.clientX, e.clientY); } : undefined}
+      className={`group relative w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-all
+        ${isActive ? "bg-[var(--accent-a08)]" : "hover:bg-[#1f1d18]"}
+        ${isPast ? "opacity-40" : ""}
+        ${isDragging ? "opacity-20" : ""}
+        ${isDragOver ? "outline outline-1 outline-[var(--accent-a30)] bg-[var(--accent-a08)]" : ""}
+      `}
     >
+      {/* Drag handle — visual only, draggable is on the row */}
+      <div
+        className={`shrink-0 transition-colors select-none pointer-events-none ${
+          isDraggable
+            ? "text-[#2a2820] group-hover:text-[#5a5448]"
+            : "w-2.5"
+        }`}
+      >
+        {isDraggable && (
+          <svg width="10" height="14" viewBox="0 0 10 16" fill="currentColor">
+            <circle cx="3" cy="2" r="1.5" />
+            <circle cx="7" cy="2" r="1.5" />
+            <circle cx="3" cy="6" r="1.5" />
+            <circle cx="7" cy="6" r="1.5" />
+            <circle cx="3" cy="10" r="1.5" />
+            <circle cx="7" cy="10" r="1.5" />
+          </svg>
+        )}
+      </div>
+
+      {/* Artwork */}
       <div className="w-8 h-8 rounded shrink-0 overflow-hidden bg-[#2a2820]">
         {art ? (
-          <img src={art} alt="" className="w-full h-full object-cover" />
+          <img src={art} alt="" draggable={false} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="text-[#3a3628]">
@@ -46,17 +94,32 @@ function QueueTrack({
           </div>
         )}
       </div>
-      <div className="min-w-0 flex-1">
+
+      {/* Track info — click to play */}
+      <button onClick={onClick} className="min-w-0 flex-1 text-left">
         <p className={`text-xs truncate ${isActive ? "text-[var(--accent)]" : "text-[#f0ead8]"}`}>{title}</p>
         <p className="text-[11px] text-[#7a7060] truncate">{artist}</p>
-      </div>
+      </button>
+
+      {/* Right side: badge + duration + delete */}
       <div className="flex items-center gap-1.5 shrink-0">
         {isManual && !isPast && (
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] opacity-70" title="Added by you" />
         )}
         <span className="text-[11px] font-mono text-[#3a3628]">{formatDuration(duration)}</span>
+        {onRemove && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+            title="Remove from queue"
+            className="opacity-0 group-hover:opacity-100 p-0.5 text-[#3a3628] hover:text-[#c85858] transition-all"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+            </svg>
+          </button>
+        )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -66,22 +129,28 @@ interface QueuePanelProps {
 }
 
 export function QueuePanel({ open, onClose }: QueuePanelProps) {
-  const { queue, shuffledQueue, queueIndex, shuffle, setQueue, setIsPlaying, manualQueuePaths } = usePlayerStore();
+  const {
+    queue, shuffledQueue, queueIndex, shuffle, jumpToTrack, playFromQueue, setIsPlaying,
+    manualQueuePaths, removeFromQueue, reorderQueue,
+  } = usePlayerStore();
   const activeQueue = shuffle ? shuffledQueue : queue;
   const [showHistory, setShowHistory] = useState(false);
+  const [localFutureTracks, setLocalFutureTracks] = useState<typeof futureTracks>([]);
+  const [dragLocalIdx, setDragLocalIdx] = useState<number | null>(null);
+  const dragSrcAbsIdxRef = useRef<number | null>(null);
+  const dropFiredRef = useRef(false);
 
-  // Build a set for fast manual-track lookup (handles duplicates by presence only)
   const manualSet = new Set(manualQueuePaths);
 
-  // ─── Past tracks (behind current index) ──────────────────────────────────
+  // ─── Past tracks ──────────────────────────────────────────────────────────
   const allPast  = activeQueue.slice(0, queueIndex);
-  const pastTracks = allPast.slice(-HISTORY_LIMIT); // most recent HISTORY_LIMIT
+  const pastTracks = allPast.slice(-HISTORY_LIMIT);
   const hiddenPastCount = allPast.length - pastTracks.length;
 
   // ─── Current track ────────────────────────────────────────────────────────
   const currentTrackInQueue = activeQueue[queueIndex];
 
-  // ─── Upcoming tracks with limits ─────────────────────────────────────────
+  // ─── Upcoming tracks ──────────────────────────────────────────────────────
   const allFuture = activeQueue.slice(queueIndex + 1);
   let autoShown = 0, manualShown = 0;
   const futureTracks: { track: typeof allFuture[0]; absIdx: number; isManual: boolean }[] = [];
@@ -101,9 +170,59 @@ export function QueuePanel({ open, onClose }: QueuePanelProps) {
 
   const hiddenFutureCount = allFuture.length - futureTracks.length;
 
+  // Sync local list when queue changes (but not mid-drag)
+  useEffect(() => {
+    if (dragLocalIdx === null) setLocalFutureTracks(futureTracks);
+  }, [activeQueue, queueIndex]);
+
   function handleClickTrack(absIdx: number) {
-    setQueue(queue, absIdx);
+    if (absIdx > queueIndex) {
+      playFromQueue(absIdx);
+    } else {
+      jumpToTrack(absIdx);
+    }
     setIsPlaying(true);
+  }
+
+  function handleDragStart(localIdx: number, absIdx: number) {
+    dropFiredRef.current = false;
+    dragSrcAbsIdxRef.current = absIdx;
+    setDragLocalIdx(localIdx);
+  }
+
+  function handleDragOver(localIdx: number) {
+    if (dragLocalIdx === null || dragLocalIdx === localIdx) return;
+    const next = [...localFutureTracks];
+    const [moved] = next.splice(dragLocalIdx, 1);
+    next.splice(localIdx, 0, moved);
+    setLocalFutureTracks(next);
+    setDragLocalIdx(localIdx);
+  }
+
+  function handleDrop() {
+    dropFiredRef.current = true;
+    const srcAbsIdx = dragSrcAbsIdxRef.current;
+    const finalLocalIdx = dragLocalIdx;
+    setDragLocalIdx(null);
+    dragSrcAbsIdxRef.current = null;
+    if (srcAbsIdx === null || finalLocalIdx === null) return;
+    // Compute target absIdx from the item immediately after the dropped position.
+    // reorderQueue(from, to) inserts before `to` when moving up, and before `to-1` when moving down,
+    // so passing the next item's absIdx correctly places the dragged item after its new neighbour.
+    const nextItem = localFutureTracks[finalLocalIdx + 1];
+    const prevItem = localFutureTracks[finalLocalIdx - 1];
+    const toAbsIdx = nextItem ? nextItem.absIdx : prevItem ? prevItem.absIdx + 1 : srcAbsIdx;
+    reorderQueue(srcAbsIdx, toAbsIdx);
+  }
+
+  function handleDragEnd() {
+    if (!dropFiredRef.current) {
+      // Drag was cancelled — reset visual state back to store order
+      setLocalFutureTracks(futureTracks);
+    }
+    dropFiredRef.current = false;
+    setDragLocalIdx(null);
+    dragSrcAbsIdxRef.current = null;
   }
 
   return (
@@ -140,7 +259,6 @@ export function QueuePanel({ open, onClose }: QueuePanelProps) {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                {/* History toggle */}
                 {queueIndex > 0 && (
                   <button
                     onClick={() => setShowHistory((v) => !v)}
@@ -224,6 +342,7 @@ export function QueuePanel({ open, onClose }: QueuePanelProps) {
                       isPast={false}
                       isManual={manualSet.has(currentTrackInQueue.path)}
                       scrollToMe={true}
+                      track={currentTrackInQueue}
                       onClick={() => {}}
                     />
                   )}
@@ -232,22 +351,30 @@ export function QueuePanel({ open, onClose }: QueuePanelProps) {
                   {futureTracks.length > 0 && (
                     <div className="mx-4 my-2 border-t border-white/5" />
                   )}
-                  {futureTracks.map(({ track, absIdx, isManual }) => (
-                    <QueueTrack
-                      key={`future-${track.path}-${absIdx}`}
-                      path={track.path}
-                      title={track.title}
-                      artist={track.artist}
-                      duration={track.duration_secs}
-                      isActive={false}
-                      isPast={false}
-                      isManual={isManual}
-                      scrollToMe={false}
-                      onClick={() => handleClickTrack(absIdx)}
-                    />
+                  {localFutureTracks.map(({ track, absIdx, isManual }, localIdx) => (
+                    <motion.div key={track.path} layout transition={{ duration: 0.18 }}>
+                      <QueueTrack
+                        path={track.path}
+                        title={track.title}
+                        artist={track.artist}
+                        duration={track.duration_secs}
+                        isActive={false}
+                        isPast={false}
+                        isManual={isManual}
+                        scrollToMe={false}
+                        track={track}
+                        onClick={() => handleClickTrack(absIdx)}
+                        onRemove={() => removeFromQueue(absIdx)}
+                        onDragStart={() => handleDragStart(localIdx, absIdx)}
+                        onDragOver={() => handleDragOver(localIdx)}
+                        onDrop={handleDrop}
+                        onDragEnd={handleDragEnd}
+                        isDragging={dragLocalIdx === localIdx}
+                        isDragOver={false}
+                      />
+                    </motion.div>
                   ))}
 
-                  {/* "More songs" notice */}
                   {hiddenFutureCount > 0 && (
                     <p className="text-center text-[10px] font-mono text-[#3a3628] py-3">
                       + {hiddenFutureCount} more in queue

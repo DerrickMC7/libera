@@ -4,6 +4,8 @@ import { useAlbums, AlbumSortBy } from "../../hooks/useAlbums";
 import { AlbumCard } from "../molecules/AlbumCard";
 import { AlbumView } from "./AlbumView";
 import { Album } from "../../types/album";
+import { useNavigationStore, syncAlbumDetail } from "../../store/navigationStore";
+import { Tooltip } from "../atoms/Tooltip";
 
 const CARD_MIN_WIDTH = 160;
 const GAP = 24;
@@ -53,6 +55,13 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
   });
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function onFocusSearch() { searchInputRef.current?.focus(); }
+    window.addEventListener("focus-search-bar", onFocusSearch);
+    return () => window.removeEventListener("focus-search-bar", onFocusSearch);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(deferredSearch), 300);
@@ -60,8 +69,27 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
   }, [deferredSearch]);
 
   const { data: albums = [], isLoading } = useAlbums(debouncedSearch, active, sortBy);
+  const { pendingAlbumTarget, clearPendingAlbum, backTarget, goBack } = useNavigationStore();
+
+  useEffect(() => {
+    if (!pendingAlbumTarget || albums.length === 0) return;
+    const album = albums.find(
+      (a) => a.album === pendingAlbumTarget.album && a.artist === pendingAlbumTarget.albumArtist
+    );
+    if (album) { setSelectedAlbum(album); clearPendingAlbum(); }
+  }, [pendingAlbumTarget, albums]);
+
+  const handleBack = useCallback(() => {
+    if (backTarget) goBack();
+    else setSelectedAlbum(null);
+  }, [backTarget, goBack]);
 
   useEffect(() => { onDetailChange?.(!!selectedAlbum); }, [selectedAlbum]);
+
+  // Keep module-level mirror in sync so backTarget can snapshot the open album
+  useEffect(() => {
+    syncAlbumDetail(selectedAlbum ? { album: selectedAlbum.album, albumArtist: selectedAlbum.artist } : null);
+  }, [selectedAlbum]);
 
   // ResizeObserver — accurate once DOM is ready
   useEffect(() => {
@@ -94,12 +122,7 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
   }, [albums, columns]);
 
   if (selectedAlbum) {
-    return (
-      <AlbumView
-        album={selectedAlbum}
-        onBack={() => setSelectedAlbum(null)}
-      />
-    );
+    return <AlbumView album={selectedAlbum} onBack={handleBack} />;
   }
 
   return (
@@ -122,13 +145,16 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
         </div>
 
         <div className="flex gap-3 mb-6">
-          <input
-            type="text"
-            placeholder="Search albums, artists..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
-          />
+          <Tooltip shortcut="Ctrl+F">
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search albums, artists..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+            />
+          </Tooltip>
           <div className="flex gap-1 shrink-0">
             {SORT_OPTIONS.map((opt) => (
               <button
@@ -193,7 +219,10 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
                       <AlbumCard
                         key={`${album.artist}-${album.album}`}
                         album={album}
-                        onClick={() => setSelectedAlbum(album)}
+                        onClick={() => {
+                          useNavigationStore.getState().clearBackTarget();
+                          setSelectedAlbum(album);
+                        }}
                       />
                     );
                   })}

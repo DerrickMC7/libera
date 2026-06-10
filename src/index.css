@@ -5,6 +5,7 @@
 :root {
   --accent:      #d4872a;
   --accent-hover:#e8a84c;
+  --accent-on:   #ffffff;
   --accent-a08:  rgba(212,135,42,0.08);
   --accent-a10:  rgba(212,135,42,0.10);
   --accent-a12:  rgba(212,135,42,0.12);
@@ -104,6 +105,32 @@
     rgba(0,0,0,0.18)     var(--volume-pct, 25%),
     rgba(0,0,0,0.18)     100%
   );
+}
+
+/* ─── Hue slider ───────────────────────────────────────────────────── */
+.hue-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(to right,
+    hsl(0,100%,50%), hsl(30,100%,50%), hsl(60,100%,50%), hsl(90,100%,50%),
+    hsl(120,100%,50%), hsl(150,100%,50%), hsl(180,100%,50%), hsl(210,100%,50%),
+    hsl(240,100%,50%), hsl(270,100%,50%), hsl(300,100%,50%), hsl(330,100%,50%),
+    hsl(360,100%,50%));
+  outline: none;
+  cursor: pointer;
+}
+.hue-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid rgba(0,0,0,0.25);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  cursor: pointer;
 }
 
 /* ─── PDF text layer ───────────────────────────────────────────────── */

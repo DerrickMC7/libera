@@ -17,6 +17,8 @@ export default defineConfig({
       : {
           "@tauri-apps/api/core": resolve(__dirname, "./src/lib/tauri-shim.ts"),
           "@tauri-apps/api/event": resolve(__dirname, "./src/lib/tauri-event-shim.ts"),
+          "@tauri-apps/api/window": resolve(__dirname, "./src/lib/tauri-window-shim.ts"),
+          "@tauri-apps/api/webviewWindow": resolve(__dirname, "./src/lib/tauri-webview-shim.ts"),
         },
   },
   server: {

@@ -3,22 +3,25 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { VirtualItem } from "@tanstack/react-virtual";
 import { useQueryClient } from "@tanstack/react-query";
-import { useTracksCount, useScanFolder, PAGE_SIZE } from "../../hooks/useLibrary";
+import { useTracksCount, PAGE_SIZE } from "../../hooks/useLibrary";
 import { usePlayerStore } from "../../store/playerStore";
-import { Button } from "../atoms/Button";
-import { TrackRow } from "../molecules/TrackRow";
+import { TrackRow, TrackRowHeader, trackRowColumns } from "../molecules/TrackRow";
 import { Track } from "../../types/track";
 import { invoke } from "@tauri-apps/api/core";
 import { AlbumGrid } from "./AlbumGrid";
 import { ArtistGrid } from "./ArtistGrid";
 import { GenreList } from "./GenreList";
+import { PlaylistList } from "./PlaylistList";
+import { PlaylistView } from "./PlaylistView";
+import { useNavigationStore, registerMusicViewSetter, syncMusicView } from "../../store/navigationStore";
+import { Tooltip } from "../atoms/Tooltip";
 
 const IS_DEMO = !("__TAURI_INTERNALS__" in window);
 const SKELETON_EXTRA = 20;
 const MAX_PAGES_IN_MEMORY = 6;
 const MAX_CONCURRENT_LOADS = 2;
 
-type View = "tracks" | "albums" | "artists" | "genres";
+type View = "tracks" | "albums" | "artists" | "genres" | "playlists";
 type TrackSortBy = "title" | "artist" | "duration_asc" | "duration_desc";
 
 const TRACK_SORT_OPTIONS: { id: TrackSortBy; label: string }[] = [
@@ -28,26 +31,22 @@ const TRACK_SORT_OPTIONS: { id: TrackSortBy; label: string }[] = [
   { id: "duration_desc",label: "Long first" },
 ];
 
+const SKELETON_COLS = trackRowColumns({ showArtistColumn: true, showAlbumColumn: true });
+
 function SkeletonRow({ opacity }: { opacity: number }) {
   return (
     <div
-      className="grid grid-cols-[2fr_1fr_1fr_80px] gap-4 px-4 py-3 rounded-lg"
-      style={{ opacity }}
+      className="grid h-12 items-center gap-3 px-4 rounded-lg"
+      style={{ opacity, gridTemplateColumns: SKELETON_COLS }}
     >
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-[#1f1d18] animate-pulse shrink-0" />
-        <div className="flex flex-col gap-1.5 flex-1">
-          <div className="h-3 rounded bg-[#1f1d18] animate-pulse w-3/4" />
-          <div className="h-2.5 rounded bg-[#1a1814] animate-pulse w-1/2" />
-        </div>
-      </div>
-      <div className="flex items-center">
-        <div className="h-3 rounded bg-[#1f1d18] animate-pulse w-2/3" />
-      </div>
-      <div className="flex items-center">
+      <div className="w-9 h-9 rounded-md bg-[#1f1d18] animate-pulse shrink-0" />
+      <div className="flex flex-col gap-1.5">
         <div className="h-3 rounded bg-[#1f1d18] animate-pulse w-3/4" />
+        <div className="h-2.5 rounded bg-[#1a1814] animate-pulse w-1/2" />
       </div>
-      <div className="flex items-center justify-end">
+      <div className="h-3 rounded bg-[#1f1d18] animate-pulse w-2/3" />
+      <div className="h-3 rounded bg-[#1f1d18] animate-pulse w-3/4" />
+      <div className="flex justify-end">
         <div className="h-3 rounded bg-[#1f1d18] animate-pulse w-8" />
       </div>
     </div>
@@ -57,10 +56,10 @@ function SkeletonRow({ opacity }: { opacity: number }) {
 export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const [view, setView] = useState<View>("tracks");
   const [resetKeys, setResetKeys] = useState({ albums: 0, artists: 0, genres: 0 });
+  const [activePlaylistId, setActivePlaylistId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [trackSortBy, setTrackSortBy] = useState<TrackSortBy>("title");
-  const [isDetailView, setIsDetailView] = useState(false);
   const pagesRef = useRef<Map<number, Track[]>>(new Map());
   const pageOrderRef = useRef<number[]>([]);
   const loadingRef = useRef<Set<number>>(new Set());
@@ -72,9 +71,24 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const forceUpdate = useCallback(() => startTransition(() => setTick((t) => t + 1)), [startTransition]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { mutate: scanFolder, isPending } = useScanFolder();
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
   const queryClient = useQueryClient();
+  const pendingArtistName = useNavigationStore((s) => s.pendingArtistName);
+  const pendingAlbumTarget = useNavigationStore((s) => s.pendingAlbumTarget);
+
+  // Register setter so goBack() can drive MusicLibrary without prop drilling
+  useEffect(() => { registerMusicViewSetter((v) => setView(v as View)); }, []);
+  // Keep module-level mirror in sync
+  useEffect(() => { syncMusicView(view); }, [view]);
+
+  useEffect(() => {
+    if (pendingArtistName) setView("artists");
+  }, [pendingArtistName]);
+
+  useEffect(() => {
+    if (pendingAlbumTarget) setView("albums");
+  }, [pendingAlbumTarget]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -98,6 +112,29 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     activeLoadsRef.current = 0;
     forceUpdate();
   }, [trackSortBy]);
+
+  useEffect(() => {
+    function onFocusSearch() {
+      if (view !== "tracks") return;
+      searchInputRef.current?.focus();
+    }
+    window.addEventListener("focus-search-bar", onFocusSearch);
+    return () => window.removeEventListener("focus-search-bar", onFocusSearch);
+  }, [view]);
+
+  // When a track's metadata is saved, clear pagesRef so loadPage re-fetches fresh data.
+  // invalidateQueries alone doesn't help because pagesRef is a plain ref, not reactive state.
+  useEffect(() => {
+    const handler = () => {
+      pagesRef.current.clear();
+      pageOrderRef.current = [];
+      loadingRef.current.clear();
+      activeLoadsRef.current = 0;
+      forceUpdate();
+    };
+    window.addEventListener("library:track-updated", handler);
+    return () => window.removeEventListener("library:track-updated", handler);
+  }, [forceUpdate]);
 
   const { data: totalCount = 0 } = useTracksCount(debouncedSearch);
 
@@ -156,7 +193,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const virtualizer = useVirtualizer({
     count: totalCount + SKELETON_EXTRA,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 52,
+    estimateSize: () => 48,
     overscan: 20,
   });
 
@@ -182,22 +219,6 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     loadVisiblePages();
   }, [tick]);
 
-  async function handleScan() {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "Select music folder",
-      });
-      if (selected && typeof selected === "string") {
-        scanFolder(selected);
-      }
-    } catch (e) {
-      console.error("Dialog error:", e);
-    }
-  }
-
   function handlePlay(index: number) {
     const track = getTrack(index);
     if (!track) return;
@@ -218,33 +239,24 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     loadVisiblePages();
   }
 
-  const views: View[] = ["tracks", "albums", "artists", "genres"];
+  const views: View[] = ["tracks", "albums", "artists", "genres", "playlists"];
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
       <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        {!isDetailView && (
-          <div className="flex items-end justify-between mb-7">
-            <div>
-              <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
-                Your Collection
-              </p>
-              <h1
-                className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
-                style={{ fontFamily: "Fraunces, serif" }}
-              >
-                Music{" "}
-                <em className="italic text-[#c8bfa8] font-light">library</em>
-              </h1>
-            </div>
-            {!IS_DEMO && (
-              <Button variant="primary" onClick={handleScan} disabled={isPending}>
-                {isPending ? "Scanning..." : "Add folder"}
-              </Button>
-            )}
-          </div>
-        )}
+        <div className="mb-7">
+          <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
+            Your Collection
+          </p>
+          <h1
+            className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+            style={{ fontFamily: "Fraunces, serif" }}
+          >
+            Music{" "}
+            <em className="italic text-[#c8bfa8] font-light">library</em>
+          </h1>
+        </div>
 
         {/* View tabs */}
         <div className="flex gap-1 mb-6">
@@ -253,7 +265,8 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
               key={v}
               onClick={() => {
                 setView(v);
-                setIsDetailView(false);
+                useNavigationStore.getState().clearBackTarget();
+                if (v !== "playlists") setActivePlaylistId(null);
                 if (v === "albums") setResetKeys((k) => ({ ...k, albums: k.albums + 1 }));
                 else if (v === "artists") setResetKeys((k) => ({ ...k, artists: k.artists + 1 }));
                 else if (v === "genres") setResetKeys((k) => ({ ...k, genres: k.genres + 1 }));
@@ -274,17 +287,19 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
           ))}
         </div>
 
-        {/* Search + sort + column headers — only in tracks view, not in detail views */}
-        {view === "tracks" && !isDetailView && (
+        {view === "tracks" && !activePlaylistId && (
           <>
             <div className="flex gap-3 mb-4">
-              <input
-                type="text"
-                placeholder="Search tracks, artists, albums..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
-              />
+              <Tooltip shortcut="Ctrl+F">
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  placeholder="Search tracks, artists, albums..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+                />
+              </Tooltip>
             </div>
             <div className="flex gap-1 mb-4 flex-wrap">
               {TRACK_SORT_OPTIONS.map((opt) => (
@@ -301,12 +316,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
                 </button>
               ))}
             </div>
-            <div className="grid grid-cols-[2fr_1fr_1fr_120px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
-              <span>Title</span>
-              <span>Artist</span>
-              <span>Album</span>
-              <span className="text-right">Time</span>
-            </div>
+            <TrackRowHeader showArtistColumn showAlbumColumn />
           </>
         )}
       </div>
@@ -326,11 +336,11 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
             className="flex-1 overflow-y-auto px-10 py-4"
             onScroll={handleScroll}
           >
-            {!isPending && totalCount === 0 && (
+            {totalCount === 0 && (
               <div className="flex flex-col items-center justify-center mt-32 gap-3">
                 <p className="text-[#3a3628] text-sm">Your library is empty</p>
                 <p className="text-[#3a3628] text-xs">
-                  Click "Add folder" to scan your music
+                  Go to Settings → Library to add a music folder
                 </p>
               </div>
             )}
@@ -360,9 +370,10 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
                       ) : (
                         <TrackRow
                           track={track}
-                          index={index}
                           isActive={currentTrack?.path === track.path}
                           onClick={() => handlePlay(index)}
+                          showArtistColumn
+                          showAlbumColumn
                         />
                       )}
                     </div>
@@ -380,6 +391,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
               key={
                 view === "albums" ? `albums-${resetKeys.albums}`
                 : view === "artists" ? `artists-${resetKeys.artists}`
+                : view === "playlists" ? `playlists-${activePlaylistId ?? "list"}`
                 : `genres-${resetKeys.genres}`
               }
               initial={{ opacity: 0, y: 8 }}
@@ -388,9 +400,18 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
               transition={{ duration: 0.15 }}
               className="absolute inset-0 overflow-hidden"
             >
-              {view === "albums" && <AlbumGrid active onDetailChange={setIsDetailView} />}
-              {view === "artists" && <ArtistGrid active onDetailChange={setIsDetailView} />}
-              {view === "genres" && <GenreList active onDetailChange={setIsDetailView} />}
+              {view === "albums" && <AlbumGrid active />}
+              {view === "artists" && <ArtistGrid active />}
+              {view === "genres" && <GenreList active />}
+              {view === "playlists" && activePlaylistId === null && (
+                <PlaylistList onOpen={(id) => setActivePlaylistId(id)} />
+              )}
+              {view === "playlists" && activePlaylistId !== null && (
+                <PlaylistView
+                  playlistId={activePlaylistId}
+                  onBack={() => setActivePlaylistId(null)}
+                />
+              )}
             </motion.div>
           )}
         </AnimatePresence>

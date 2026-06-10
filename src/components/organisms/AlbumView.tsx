@@ -5,7 +5,7 @@ import { Track } from "../../types/track";
 import { Album } from "../../types/album";
 import { useArtwork } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
-import { TrackRow } from "../molecules/TrackRow";
+import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 interface AlbumViewProps {
@@ -115,23 +115,16 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
       {/* Divider */}
       <div className="mx-10 border-t border-white/6 mb-2" />
 
-      {/* Column headers */}
-      <div className="grid grid-cols-[2fr_1fr_120px] gap-4 px-10 pb-2 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
-        <span>Title</span>
-        <span>Artist</span>
-        <span className="text-right">Time</span>
-      </div>
-
       {/* Track list */}
       <div className="px-10 pb-8">
+        <TrackRowHeader showArtistColumn />
         {tracks.map((track, index) => (
           <TrackRow
             key={track.path}
             track={track}
-            index={index}
             isActive={currentTrack?.path === track.path}
             onClick={() => handlePlayTrack(index)}
-            showAlbum={false}
+            showArtistColumn
           />
         ))}
       </div>

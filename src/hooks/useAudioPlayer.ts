@@ -34,7 +34,7 @@ export function useAudioPlayer() {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const { currentTrack, isPlaying, volume } = usePlayerStore();
+  const { currentTrack, isPlaying, volume, isMuted } = usePlayerStore();
   const { eqEnabled, eqBands, normalizeVolume } = useSettingsStore();
 
   // ─── Setup: create both audio elements once ──────────────────────────────
@@ -144,7 +144,7 @@ export function useAudioPlayer() {
     const triggeredAt = ctx.currentTime;
 
     tAudio.src    = convertFileSrc(nextTrack.path);
-    tAudio.volume = store.volume;
+    tAudio.volume = store.isMuted ? 0 : store.volume;
     loadedPathRef.current = nextTrack.path;
 
     function cleanup() {
@@ -290,8 +290,9 @@ export function useAudioPlayer() {
 
   // ─── Volume ───────────────────────────────────────────────────────────────
   useEffect(() => {
-    [audioARef, audioBRef].forEach((r) => { if (r.current) r.current.volume = volume; });
-  }, [volume]);
+    const effective = isMuted ? 0 : volume;
+    [audioARef, audioBRef].forEach((r) => { if (r.current) r.current.volume = effective; });
+  }, [volume, isMuted]);
 
   // ─── EQ ───────────────────────────────────────────────────────────────────
   useEffect(() => {
