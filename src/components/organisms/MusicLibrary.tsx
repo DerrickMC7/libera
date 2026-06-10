@@ -17,7 +17,6 @@ import { useNavigationStore, registerMusicViewSetter, syncMusicView } from "../.
 import { Tooltip } from "../atoms/Tooltip";
 
 const IS_DEMO = !("__TAURI_INTERNALS__" in window);
-const SKELETON_EXTRA = 20;
 const MAX_PAGES_IN_MEMORY = 6;
 const MAX_CONCURRENT_LOADS = 2;
 
@@ -191,7 +190,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   }
 
   const virtualizer = useVirtualizer({
-    count: totalCount + SKELETON_EXTRA,
+    count: totalCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 48,
     overscan: 20,
@@ -349,11 +348,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
                 {virtualizer.getVirtualItems().map((virtualItem: VirtualItem) => {
                   const index = virtualItem.index;
                   const track = getTrack(index);
-                  const isSkeleton = index >= totalCount || !track;
-                  const skeletonOpacity =
-                    index >= totalCount
-                      ? Math.max(0, 1 - (index - totalCount) * 0.08)
-                      : 1;
+                  const isSkeleton = !track;
                   return (
                     <div
                       key={virtualItem.key}
@@ -366,7 +361,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
                       }}
                     >
                       {isSkeleton ? (
-                        <SkeletonRow opacity={skeletonOpacity} />
+                        <SkeletonRow opacity={1} />
                       ) : (
                         <TrackRow
                           track={track}

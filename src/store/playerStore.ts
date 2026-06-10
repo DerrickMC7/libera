@@ -158,11 +158,15 @@ export const usePlayerStore = create<PlayerState>()(
 
     if (queueIndex + 1 < activeQueue.length) {
       nextIndex = queueIndex + 1;
+    } else if (repeat === "off") {
+      set({ isPlaying: false });
+      return;
     } else if (shuffle) {
-      // Loop: reshuffle future only (start from index 0)
+      // repeat === "all" + shuffle: reshuffle and loop
       newShuffled = smartShuffle(queue, -1, []);
       nextIndex = 0;
     } else {
+      // repeat === "all": loop to start
       nextIndex = 0;
     }
 

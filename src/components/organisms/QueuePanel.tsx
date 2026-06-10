@@ -126,9 +126,11 @@ function QueueTrack({
 interface QueuePanelProps {
   open: boolean;
   onClose: () => void;
+  isOnTop: boolean;
+  onBringToFront: () => void;
 }
 
-export function QueuePanel({ open, onClose }: QueuePanelProps) {
+export function QueuePanel({ open, onClose, isOnTop, onBringToFront }: QueuePanelProps) {
   const {
     queue, shuffledQueue, queueIndex, shuffle, jumpToTrack, playFromQueue, setIsPlaying,
     manualQueuePaths, removeFromQueue, reorderQueue,
@@ -229,23 +231,14 @@ export function QueuePanel({ open, onClose }: QueuePanelProps) {
     <AnimatePresence>
       {open && (
         <>
-          {/* Backdrop */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-40"
-            onClick={onClose}
-          />
-
           {/* Panel */}
           <motion.div
             initial={{ x: "100%", opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "100%", opacity: 0 }}
             transition={{ type: "spring", stiffness: 400, damping: 40 }}
-            className="fixed right-0 top-0 bottom-20 w-80 bg-[#161410] border-l border-white/5 z-50 flex flex-col shadow-2xl"
+            onMouseDown={onBringToFront}
+            className={`fixed right-0 top-0 bottom-20 w-80 bg-[#161410] border-l border-white/5 flex flex-col shadow-2xl ${isOnTop ? "z-[52]" : "z-[51]"}`}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-white/5 shrink-0">

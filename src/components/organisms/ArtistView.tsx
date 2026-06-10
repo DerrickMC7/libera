@@ -1,3 +1,7 @@
+import { useState, useRef, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { AnimatePresence } from "framer-motion";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useArtistDetails } from "../../hooks/useArtists";
 import { useArtwork } from "../../hooks/useArtwork";
 import { useArtistImage } from "../../hooks/useArtistImage";
@@ -5,6 +9,7 @@ import { useArtistBanner } from "../../hooks/useArtistBanner";
 import { usePlayerStore } from "../../store/playerStore";
 import { useNavigationStore } from "../../store/navigationStore";
 import { TrackRow } from "../molecules/TrackRow";
+import { ArtistBannerModal } from "./ArtistBannerModal";
 import { Artist } from "../../types/artist";
 import { Track } from "../../types/track";
 
@@ -34,14 +39,43 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
   const { data: albums = [], isLoading } = useArtistDetails(artist.name);
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
   const navigateToAlbum = useNavigationStore((s) => s.navigateToAlbum);
+  const queryClient = useQueryClient();
+
   const { data: artistBannerUrl } = useArtistBanner(artist.name);
   const { data: artistImageUrl } = useArtistImage(artist.name);
   const { data: fallbackArtworkUrl } = useArtwork(artist.cover_path, true);
-  // Prefer dedicated wide banner, then portrait thumb, then embedded album art
   const bannerUrl = artistBannerUrl ?? artistImageUrl ?? fallbackArtworkUrl;
-  const isWideBanner = !!artistBannerUrl;
 
-  // Flatten all tracks for play all
+  const { data: isCustomBanner } = useQuery({
+    queryKey: ["artist-banner-custom", artist.name],
+    queryFn: () => invoke<boolean>("is_artist_banner_custom", { artistName: artist.name }),
+    staleTime: Infinity,
+  });
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [cropModalOpen, setCropModalOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [menuOpen]);
+
+  async function handleResetBanner() {
+    try {
+      await invoke("clear_artist_banner_custom", { artistName: artist.name });
+      queryClient.invalidateQueries({ queryKey: ["artist-banner", artist.name] });
+      queryClient.invalidateQueries({ queryKey: ["artist-banner-custom", artist.name] });
+    } catch (e) {
+      console.error("Failed to reset banner", e);
+    }
+  }
+
   const allTracks = albums.flatMap((a) => a.tracks);
 
   function handlePlayAll() {
@@ -51,28 +85,28 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
   }
 
   function handlePlayTrack(track: Track, albumTracks: Track[]) {
-    const index = albumTracks.indexOf(track);
-    setQueue(albumTracks, index);
+    setQueue(albumTracks, albumTracks.indexOf(track));
     setIsPlaying(true);
   }
 
   return (
+    <>
     <div className="flex flex-col h-full bg-[#0e0d0b] overflow-y-auto">
-      {/* Banner grows to image's natural size; max-h caps tall portrait fallbacks.
-          The bottom gradient fades over the clip edge so the cut is invisible. */}
-      <div className="relative w-full shrink-0 overflow-hidden max-h-[500px]">
+      <div
+        className="relative w-full shrink-0 overflow-hidden"
+        style={{ aspectRatio: "3/1", maxHeight: "500px" }}
+      >
         {bannerUrl ? (
           <img
             src={bannerUrl}
             alt={artist.name}
-            className="w-full h-auto block"
+            className="absolute inset-0 w-full h-full object-cover block"
             style={{ filter: "brightness(0.65)" }}
           />
         ) : (
-          <div className="h-48 bg-[#1a1814]" />
+          <div className="absolute inset-0 bg-[#1a1814]" />
         )}
 
-        {/* Gradient: dark top (for back button legibility) + fade-to-bg at bottom */}
         <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-black/10 to-[#0e0d0b]" />
 
         {/* Back button */}
@@ -86,7 +120,45 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
           Artists
         </button>
 
-        {/* Artist name pinned to bottom of banner */}
+        {/* Pen icon → dropdown menu */}
+        <div className="absolute top-5 right-8 z-10" ref={menuRef}>
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            title="Edit banner"
+            className="p-1.5 rounded-md bg-black/30 text-[#c8bfa8]/60 hover:text-[#c8bfa8] hover:bg-black/50 transition-colors"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+            </svg>
+          </button>
+
+          {menuOpen && (
+            <div className="absolute right-0 top-full mt-1.5 bg-[#1a1814] border border-white/10 rounded-xl shadow-2xl py-1 min-w-[148px]">
+              <button
+                onClick={() => { setMenuOpen(false); setCropModalOpen(true); }}
+                className="w-full text-left px-3 py-2 text-xs text-[#c8bfa8] hover:bg-white/5 transition-colors font-mono flex items-center gap-2.5"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="shrink-0 text-[#7a7060]">
+                  <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                </svg>
+                Set banner
+              </button>
+              {isCustomBanner && (
+                <button
+                  onClick={() => { setMenuOpen(false); handleResetBanner(); }}
+                  className="w-full text-left px-3 py-2 text-xs text-[#7a7060] hover:bg-white/5 hover:text-[#c8bfa8] transition-colors font-mono flex items-center gap-2.5"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="shrink-0">
+                    <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                  </svg>
+                  Reset to auto
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Artist name */}
         <div className="absolute bottom-6 left-10 z-10">
           <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-2">Artist</p>
           <h1
@@ -134,7 +206,6 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
 
         {albums.map((albumData) => (
           <div key={albumData.album} className="mb-8">
-            {/* Album header */}
             <div className="flex items-center gap-3 mb-3">
               <AlbumCover path={albumData.cover_path} />
               <div>
@@ -151,7 +222,6 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
               </div>
             </div>
 
-            {/* Track list */}
             <div className="border-t border-white/5">
               {albumData.tracks.map((track, idx) => (
                 <TrackRow
@@ -170,5 +240,15 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
         ))}
       </div>
     </div>
+
+    <AnimatePresence>
+      {cropModalOpen && (
+        <ArtistBannerModal
+          artistName={artist.name}
+          onClose={() => setCropModalOpen(false)}
+        />
+      )}
+    </AnimatePresence>
+    </>
   );
 }
