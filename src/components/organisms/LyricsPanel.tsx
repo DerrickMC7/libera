@@ -278,7 +278,7 @@ export function LyricsPanel({ open: isOpen, onClose, progress, seek, isOnTop, on
             exit={{ x: "100%", opacity: 0 }}
             transition={{ type: "spring", stiffness: 400, damping: 40 }}
             onMouseDown={onBringToFront}
-            className={`fixed right-0 top-0 bottom-20 w-80 bg-[#161410] border-l border-white/5 flex flex-col shadow-2xl ${isOnTop ? "z-[52]" : "z-[51]"}`}
+            className={`fixed right-0 top-0 bottom-16 sm:bottom-20 w-full sm:w-80 bg-[#161410] border-l border-white/5 flex flex-col shadow-2xl ${isOnTop ? "z-[52]" : "z-[51]"}`}
           >
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-white/5 shrink-0">

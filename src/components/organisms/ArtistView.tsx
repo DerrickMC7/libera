@@ -112,7 +112,7 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
         {/* Back button */}
         <button
           onClick={onBack}
-          className="absolute top-5 left-8 flex items-center gap-1.5 text-[#c8bfa8]/80 hover:text-[#c8bfa8] transition-colors text-xs font-mono z-10"
+          className="absolute top-4 left-4 sm:top-5 sm:left-8 flex items-center gap-1.5 text-[#c8bfa8]/80 hover:text-[#c8bfa8] transition-colors text-xs font-mono z-10"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
@@ -121,7 +121,7 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
         </button>
 
         {/* Pen icon → dropdown menu */}
-        <div className="absolute top-5 right-8 z-10" ref={menuRef}>
+        <div className="absolute top-4 right-4 sm:top-5 sm:right-8 z-10" ref={menuRef}>
           <button
             onClick={() => setMenuOpen((v) => !v)}
             title="Edit banner"
@@ -159,10 +159,10 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
         </div>
 
         {/* Artist name */}
-        <div className="absolute bottom-6 left-10 z-10">
+        <div className="absolute bottom-4 sm:bottom-6 left-4 sm:left-10 z-10">
           <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-2">Artist</p>
           <h1
-            className="text-[48px] leading-none tracking-[-1.5px] font-light drop-shadow-xl"
+            className="text-[32px] sm:text-[48px] leading-none tracking-[-1px] sm:tracking-[-1.5px] font-light drop-shadow-xl"
             style={{ fontFamily: "Fraunces, serif", textShadow: "0 2px 16px rgba(0,0,0,0.7)", color: "white" }}
           >
             {artist.name}
@@ -171,7 +171,7 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
       </div>
 
       {/* Stats + play all */}
-      <div className="px-10 pt-5 pb-6">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-5 pb-4 sm:pb-6">
         <div className="flex items-center gap-5">
           <button
             onClick={handlePlayAll}
@@ -190,7 +190,7 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
       </div>
 
       {/* Albums and tracks */}
-      <div className="px-10 pb-8">
+      <div className="px-4 sm:px-10 pb-8">
         {isLoading && (
           <div className="flex flex-col gap-4">
             {Array.from({ length: 3 }).map((_, i) => (

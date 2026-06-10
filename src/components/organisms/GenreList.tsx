@@ -77,7 +77,7 @@ function GenreView({ genre, onBack }: { genre: Genre; onBack: () => void }) {
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b] overflow-y-auto">
-      <div className="px-10 pt-9 pb-6">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-4 sm:pb-6">
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors mb-8 text-xs font-mono"
@@ -91,7 +91,7 @@ function GenreView({ genre, onBack }: { genre: Genre; onBack: () => void }) {
         <div className="mb-6">
           <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">Genre</p>
           <h1
-            className="text-[32px] leading-none tracking-[-1px] text-[#faf8f2] font-light"
+            className="text-[24px] sm:text-[32px] leading-none tracking-[-1px] text-[#faf8f2] font-light"
             style={{ fontFamily: "Fraunces, serif" }}
           >
             {genre.name}
@@ -113,7 +113,7 @@ function GenreView({ genre, onBack }: { genre: Genre; onBack: () => void }) {
         <div className="border-t border-white/6" />
       </div>
 
-      <div className="px-10 pb-8">
+      <div className="px-4 sm:px-10 pb-8">
         {isLoading && (
           <div className="flex flex-col gap-1">
             {Array.from({ length: 10 }).map((_, i) => (
@@ -189,13 +189,13 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
-      <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="mb-7">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
+        <div className="mb-4 sm:mb-7">
           <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
             Your Collection
           </p>
           <h1
-            className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+            className="text-[28px] sm:text-[42px] leading-none tracking-[-1px] sm:tracking-[-1.5px] text-[#faf8f2] font-light"
             style={{ fontFamily: "Fraunces, serif" }}
           >
             Genres{" "}
@@ -205,7 +205,7 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
           </h1>
         </div>
 
-        <div className="flex gap-3 mb-6">
+        <div className="flex gap-3 mb-4 sm:mb-6">
           <Tooltip shortcut="Ctrl+F">
             <input
               ref={searchInputRef}
@@ -214,6 +214,7 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+              style={{ fontSize: "16px" }}
             />
           </Tooltip>
           {(["name", "count"] as GenreSortBy[]).map((opt) => (
@@ -232,7 +233,7 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-10 py-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-10 py-4">
         {isLoading && (
           <div className="flex flex-col gap-1">
             {Array.from({ length: 15 }).map((_, i) => (

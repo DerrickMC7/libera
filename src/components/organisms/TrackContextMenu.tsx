@@ -180,9 +180,10 @@ function ContextMenuPanel({
     const el = menuRef.current;
     if (!el) return;
     const { width: w, height: h } = el.getBoundingClientRect();
+    const bottomOffset = window.innerWidth < 640 ? 136 : 8;
     setPos({
       left: Math.min(x, window.innerWidth  - w - 8),
-      top:  Math.min(y, window.innerHeight - h - 8),
+      top:  Math.min(y, window.innerHeight - h - bottomOffset),
     });
   }, [x, y, playlistOpen]);
 

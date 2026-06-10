@@ -123,7 +123,7 @@ export function ArtistBannerModal({ artistName, onClose }: Props) {
         exit={{ scale: 0.94, opacity: 0, y: 12 }}
         transition={{ type: "spring", stiffness: 400, damping: 36 }}
         onClick={(e) => e.stopPropagation()}
-        className="relative z-10 bg-[#161410] border border-white/8 rounded-2xl shadow-2xl p-6 w-[540px]"
+        className="relative z-10 bg-[#161410] border border-white/8 rounded-2xl shadow-2xl p-4 sm:p-6 w-[calc(100vw-2rem)] sm:w-[540px] max-w-[540px]"
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
@@ -153,6 +153,7 @@ export function ArtistBannerModal({ artistName, onClose }: Props) {
         ) : (
           <>
             {/* Crop area */}
+            <div className="overflow-x-auto rounded-xl">
             <div
               className="relative overflow-hidden rounded-xl mx-auto select-none cursor-grab active:cursor-grabbing"
               style={{ width: CROP_W, height: CROP_H }}
@@ -182,6 +183,7 @@ export function ArtistBannerModal({ artistName, onClose }: Props) {
                 backgroundImage: "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
                 backgroundSize: "160px 160px",
               }} />
+            </div>
             </div>
 
             {/* Zoom slider */}

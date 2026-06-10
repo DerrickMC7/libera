@@ -80,14 +80,14 @@ export function ArtistList({ active = true }: ArtistListProps) {
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
-      <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="flex items-end justify-between mb-7">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
+        <div className="flex items-end justify-between mb-4 sm:mb-7">
           <div>
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
               Your Collection
             </p>
             <h1
-              className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+              className="text-[28px] sm:text-[42px] leading-none tracking-[-1px] sm:tracking-[-1.5px] text-[#faf8f2] font-light"
               style={{ fontFamily: "Fraunces, serif" }}
             >
               Artists{" "}
@@ -100,7 +100,7 @@ export function ArtistList({ active = true }: ArtistListProps) {
           <button
             onClick={download}
             disabled={isDownloading}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-mono tracking-widest uppercase transition-colors
+            className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-mono tracking-widest uppercase transition-colors
               bg-[#1f1d18] text-[#7a7060] hover:text-[#c8bfa8] hover:bg-[#2a2820]
               disabled:opacity-40 disabled:cursor-not-allowed border border-white/5"
           >
@@ -147,7 +147,8 @@ export function ArtistList({ active = true }: ArtistListProps) {
           placeholder="Search artists..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-6 transition-colors"
+          className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] mb-4 sm:mb-6 transition-colors"
+          style={{ fontSize: "16px" }}
         />
 
         <div className="grid grid-cols-[1fr_120px_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
@@ -158,7 +159,7 @@ export function ArtistList({ active = true }: ArtistListProps) {
       </div>
 
       {/* List */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-10 py-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-10 py-4">
         {isLoading && (
           <div className="flex flex-col gap-1">
             {Array.from({ length: 15 }).map((_, i) => (

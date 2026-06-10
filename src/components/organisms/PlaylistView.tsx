@@ -126,7 +126,7 @@ export function PlaylistView({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-10 pt-6 pb-4 shrink-0">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-6 pb-4 shrink-0">
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 text-[#5a5448] hover:text-[#c8bfa8] text-xs font-mono mb-5 transition-colors"
@@ -291,7 +291,7 @@ export function PlaylistView({
       </div>
 
       {/* Track list */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-10 pb-6">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-10 pb-6">
         {isLoading && (
           <div className="space-y-1 pt-2">
             {Array.from({ length: 8 }).map((_, i) => (

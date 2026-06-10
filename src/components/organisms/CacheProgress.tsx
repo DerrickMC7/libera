@@ -148,7 +148,7 @@ export function CacheProgress() {
           exit={{ opacity: 0, height: 0 }}
           className="overflow-hidden shrink-0"
         >
-          <div className="px-10 py-2.5 bg-[#161410] border-b border-white/5 flex items-center gap-4">
+          <div className="px-4 sm:px-10 py-2.5 bg-[#161410] border-b border-white/5 flex items-center gap-4">
             <div className="flex-1 h-px bg-[#1f1d18] rounded-full overflow-hidden">
               <motion.div
                 className="h-full rounded-full"

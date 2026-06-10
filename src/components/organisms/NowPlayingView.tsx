@@ -65,7 +65,7 @@ export function NowPlayingView({ open, onClose, progress, duration, seek }: NowP
             exit={{ scale: 0.92, opacity: 0, y: 20 }}
             transition={{ type: "spring", stiffness: 380, damping: 38 }}
             onClick={(e) => e.stopPropagation()}
-            className="relative z-10 w-[420px] bg-[#161410] rounded-2xl shadow-2xl border border-white/8 overflow-hidden"
+            className="relative z-10 w-[calc(100vw-2rem)] sm:w-[420px] max-w-[420px] bg-[#161410] rounded-2xl shadow-2xl border border-white/8 overflow-hidden"
           >
             {/* Album art */}
             <div className="relative w-full aspect-square">

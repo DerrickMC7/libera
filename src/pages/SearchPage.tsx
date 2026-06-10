@@ -411,7 +411,7 @@ export function SearchPage() {
     <div className="flex flex-col h-full bg-[#0e0d0b]">
 
       {/* Search bar */}
-      <div className="px-10 pt-10 pb-5 shrink-0">
+      <div className="px-4 sm:px-10 pt-6 sm:pt-10 pb-5 shrink-0">
         <div className="relative">
           <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-[#3a3628] pointer-events-none"
             width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
@@ -425,6 +425,7 @@ export function SearchPage() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className="w-full bg-[#1a1814] border border-white/7 rounded-xl pl-11 pr-10 py-3 text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)]/40 transition-colors"
+              style={{ fontSize: "16px" }}
             />
           </Tooltip>
           {query && (
@@ -452,7 +453,7 @@ export function SearchPage() {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-10 pb-6">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-10 pb-6">
 
         {/* ── IDLE STATE ─────────────────────────────────────────────────── */}
         {!query && (

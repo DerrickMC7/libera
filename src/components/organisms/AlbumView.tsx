@@ -44,11 +44,11 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b] overflow-y-auto">
       {/* Header */}
-      <div className="px-10 pt-9 pb-6">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-4 sm:pb-6">
         {/* Back button */}
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors mb-8 text-xs font-mono"
+          className="flex items-center gap-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors mb-5 sm:mb-8 text-xs font-mono"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
@@ -57,13 +57,13 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
         </button>
 
         {/* Album hero */}
-        <div className="flex gap-8 items-end">
+        <div className="flex flex-col sm:flex-row gap-4 sm:gap-8 items-start sm:items-end">
           {/* Cover */}
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.3 }}
-            className="w-44 h-44 rounded-xl overflow-hidden bg-[#1f1d18] shrink-0 shadow-2xl"
+            className="w-28 h-28 sm:w-44 sm:h-44 rounded-xl overflow-hidden bg-[#1f1d18] shrink-0 shadow-2xl"
           >
             {artworkUrl ? (
               <img src={artworkUrl} alt={album.album} className="w-full h-full object-cover" />
@@ -87,7 +87,7 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
               Album
             </p>
             <h1
-              className="text-[32px] leading-none tracking-[-1px] text-[#faf8f2] font-light"
+              className="text-[24px] sm:text-[32px] leading-none tracking-[-1px] text-[#faf8f2] font-light"
               style={{ fontFamily: "Fraunces, serif" }}
             >
               {album.album}
@@ -113,10 +113,10 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
       </div>
 
       {/* Divider */}
-      <div className="mx-10 border-t border-white/6 mb-2" />
+      <div className="mx-4 sm:mx-10 border-t border-white/6 mb-2" />
 
       {/* Track list */}
-      <div className="px-10 pb-8">
+      <div className="px-4 sm:px-10 pb-8">
         <TrackRowHeader showArtistColumn />
         {tracks.map((track, index) => (
           <TrackRow

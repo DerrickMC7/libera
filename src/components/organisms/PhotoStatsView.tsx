@@ -114,7 +114,7 @@ export function PhotoStatsView() {
     : null;
 
   return (
-    <div className="h-full overflow-y-auto px-10 py-6">
+    <div className="h-full overflow-y-auto px-4 sm:px-10 py-4 sm:py-6">
       <div className="max-w-3xl space-y-8">
         {/* Summary cards */}
         {stats && (

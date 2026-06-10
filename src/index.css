@@ -14,6 +14,29 @@
   --accent-a40:  rgba(212,135,42,0.40);
 }
 
+/* ─── Scrollbar utilities ────────────────────────────────────────── */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Mobile touch improvements ──────────────────────────────────── */
+* {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+body {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: none;
+}
+
 /* ─── Scrollbar — dark mode (default) ────────────────────────────── */
 ::-webkit-scrollbar              { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track        { background: transparent; }

@@ -26,7 +26,8 @@ function SkeletonCard({ opacity }: { opacity: number }) {
 }
 
 function calcColumns(width: number) {
-  return Math.max(1, Math.floor((width + GAP) / (CARD_MIN_WIDTH + GAP)));
+  const minCols = window.innerWidth < 640 ? 2 : 1;
+  return Math.max(minCols, Math.floor((width + GAP) / (CARD_MIN_WIDTH + GAP)));
 }
 
 function calcCardWidth(width: number, cols: number) {
@@ -127,14 +128,14 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
-      <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="flex items-end justify-between mb-7">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
+        <div className="flex items-end justify-between mb-4 sm:mb-7">
           <div>
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
               Your Collection
             </p>
             <h1
-              className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+              className="text-[28px] sm:text-[42px] leading-none tracking-[-1px] sm:tracking-[-1.5px] text-[#faf8f2] font-light"
               style={{ fontFamily: "Fraunces, serif" }}
             >
               Artists{" "}
@@ -147,7 +148,7 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
           <button
             onClick={download}
             disabled={isDownloading}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-mono tracking-widest uppercase transition-colors
+            className="hidden sm:flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-mono tracking-widest uppercase transition-colors
               bg-[#1f1d18] text-[#7a7060] hover:text-[#c8bfa8] hover:bg-[#2a2820]
               disabled:opacity-40 disabled:cursor-not-allowed border border-white/5"
           >
@@ -203,7 +204,7 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
           )}
         </AnimatePresence>
 
-        <div className="flex gap-3 mb-6">
+        <div className="flex gap-3 mb-4 sm:mb-6">
           <Tooltip shortcut="Ctrl+F">
             <input
               ref={searchInputRef}
@@ -212,6 +213,7 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+              style={{ fontSize: "16px" }}
             />
           </Tooltip>
           {(["name", "count"] as ArtistSortBy[]).map((opt) => (
@@ -231,7 +233,7 @@ export function ArtistGrid({ active = true, onDetailChange }: ArtistGridProps) {
       </div>
 
       {/* Grid */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-10 py-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-10 py-4">
         <div ref={gridRef} className="w-full">
           {isLoading && (
             <div
