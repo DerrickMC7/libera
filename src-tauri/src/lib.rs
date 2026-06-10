@@ -1433,6 +1433,85 @@ fn get_artist_banner(app: tauri::AppHandle, artist_name: String) -> Option<Strin
 }
 
 #[tauri::command]
+fn is_artist_banner_custom(app: tauri::AppHandle, artist_name: String) -> bool {
+    let Ok(cache_dir) = app.path().app_cache_dir() else { return false; };
+    cache_dir
+        .join("artist-banners")
+        .join(format!("{}.custom", artist_name_hash(&artist_name)))
+        .exists()
+}
+
+#[tauri::command]
+async fn set_artist_banner_custom(
+    app: tauri::AppHandle,
+    artist_name: String,
+    source_path: String,
+) -> Result<(), String> {
+    let banner_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artist-banners");
+    fs::create_dir_all(&banner_dir).map_err(|e| e.to_string())?;
+
+    let hash = artist_name_hash(&artist_name);
+    let banner_path = banner_dir.join(format!("{}.jpg", hash));
+    let marker_path = banner_dir.join(format!("{}.custom", hash));
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        use image::imageops::FilterType;
+        let img = image::open(&source_path).map_err(|e| e.to_string())?;
+        let img = if img.width() > 1920 || img.height() > 1920 {
+            img.resize(1920, 1920, FilterType::Lanczos3)
+        } else {
+            img
+        };
+        let file = fs::File::create(&banner_path).map_err(|e| e.to_string())?;
+        let mut buf = std::io::BufWriter::new(file);
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 92)
+            .encode_image(&img)
+            .map_err(|e| e.to_string())?;
+        fs::write(&marker_path, b"").map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn clear_artist_banner_custom(app: tauri::AppHandle, artist_name: String) -> Result<(), String> {
+    let Ok(banner_dir) = app.path().app_cache_dir().map(|d| d.join("artist-banners")) else {
+        return Ok(());
+    };
+    let hash = artist_name_hash(&artist_name);
+    let _ = fs::remove_file(banner_dir.join(format!("{}.jpg", hash)));
+    let _ = fs::remove_file(banner_dir.join(format!("{}.custom", hash)));
+    Ok(())
+}
+
+#[tauri::command]
+fn set_artist_banner_from_base64(
+    app: tauri::AppHandle,
+    artist_name: String,
+    image_base64: String,
+) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let banner_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artist-banners");
+    fs::create_dir_all(&banner_dir).map_err(|e| e.to_string())?;
+
+    let hash = artist_name_hash(&artist_name);
+    let bytes = STANDARD.decode(&image_base64).map_err(|e| format!("base64 decode: {e}"))?;
+    fs::write(banner_dir.join(format!("{}.jpg", hash)), &bytes).map_err(|e| e.to_string())?;
+    fs::write(banner_dir.join(format!("{}.custom", hash)), b"").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn fetch_artist_images(
     app: tauri::AppHandle,
     state: tauri::State<'_, DbState>,
@@ -1489,8 +1568,10 @@ async fn fetch_artist_images(
         .map_err(|e| e.to_string())?;
 
     for (i, (name, artist_mbid)) in artists.iter().enumerate() {
-        let thumb_path  = cache_dir.join(format!("{}.jpg", artist_name_hash(name)));
-        let banner_path = banner_dir.join(format!("{}.jpg", artist_name_hash(name)));
+        let hash          = artist_name_hash(name);
+        let thumb_path    = cache_dir.join(format!("{}.jpg", &hash));
+        let banner_path   = banner_dir.join(format!("{}.jpg", &hash));
+        let custom_marker = banner_dir.join(format!("{}.custom", &hash));
 
         let _ = app.emit(
             "artist-images://progress",
@@ -1498,7 +1579,7 @@ async fn fetch_artist_images(
         );
 
         let need_thumb  = !thumb_path.exists();
-        let need_banner = !banner_path.exists();
+        let need_banner = !banner_path.exists() && !custom_marker.exists();
 
         if need_thumb || need_banner {
             // One API call per artist covers both thumb and banner fields.
@@ -1679,8 +1760,15 @@ fn clear_artist_images(app: tauri::AppHandle) -> Result<(), String> {
 fn clear_artist_banners(app: tauri::AppHandle) -> Result<(), String> {
     let path = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("artist-banners");
     if path.exists() {
-        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
-        fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        // Delete only auto-fetched banners; preserve custom ones (.custom marker present)
+        if let Ok(entries) = fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().map_or(false, |e| e == "jpg") && !p.with_extension("custom").exists() {
+                    let _ = fs::remove_file(&p);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2643,6 +2731,14 @@ fn store_lyrics(state: &State<'_, DbState>, track_path: &str, result: &LyricsRes
 }
 
 #[tauri::command]
+fn clear_lyrics_cache(state: State<DbState>, track_path: String) -> Result<(), String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM lyrics_cache WHERE track_path = ?1", [&track_path])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_lyrics(
     state: State<'_, DbState>,
     track_path: String,
@@ -2699,33 +2795,76 @@ async fn get_lyrics(
         return Ok(result);
     }
 
-    // 3. Fetch from LRCLIB
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct LrclibResponse {
-        synced_lyrics: Option<String>,
-        plain_lyrics: Option<String>,
-    }
+    // Normalize artist: split on common separators, drop "Various Artists" / "VA",
+    // take the first real name. Handles tags like "Don Omar / Tego Calderón / Various Artists".
+    let search_artist = {
+        let skip = ["various artists", "various", "va", "unknown artist", "unknown"];
+        artist
+            .split([';', '/', ',', '&'])
+            .map(|s| s.trim())
+            .find(|s| !s.is_empty() && !skip.contains(&s.to_lowercase().as_str()))
+            .unwrap_or(artist.trim())
+            .to_string()
+    };
 
+    // 3. Fetch from LRCLIB — strict lookup first, fuzzy search as fallback
     let fetch_result: Option<LyricsResult> = async {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LrclibTrack {
+            duration: Option<f64>,
+            synced_lyrics: Option<String>,
+            plain_lyrics: Option<String>,
+        }
+
         let client = reqwest::Client::builder()
             .user_agent("Libera/1.0 (music player)")
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .ok()?;
-        let url = format!(
+
+        // Try /api/get: exact match on artist + title + album + duration
+        let get_url = format!(
             "https://lrclib.net/api/get?artist_name={}&track_name={}&album_name={}&duration={}",
-            urlencoding::encode(&artist),
+            urlencoding::encode(&search_artist),
             urlencoding::encode(&title),
             urlencoding::encode(&album),
             duration,
         );
-        let resp = client.get(&url).send().await.ok()?;
+        if let Ok(resp) = client.get(&get_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<LrclibTrack>().await {
+                    if body.synced_lyrics.is_some() || body.plain_lyrics.is_some() {
+                        return Some(LyricsResult {
+                            synced_lrc: body.synced_lyrics,
+                            plain_text: body.plain_lyrics,
+                            source: "lrclib".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fall back to /api/search: fuzzy match on artist + title only,
+        // pick the result with lyrics whose duration is closest to the track's.
+        let search_url = format!(
+            "https://lrclib.net/api/search?artist_name={}&track_name={}",
+            urlencoding::encode(&search_artist),
+            urlencoding::encode(&title),
+        );
+        let resp = client.get(&search_url).send().await.ok()?;
         if !resp.status().is_success() { return None; }
-        let body = resp.json::<LrclibResponse>().await.ok()?;
+        let items = resp.json::<Vec<LrclibTrack>>().await.ok()?;
+        let best = items.into_iter()
+            .filter(|i| i.synced_lyrics.is_some() || i.plain_lyrics.is_some())
+            .min_by_key(|i| {
+                i.duration
+                    .map(|d| (d - duration as f64).abs() as u64)
+                    .unwrap_or(u64::MAX)
+            })?;
         Some(LyricsResult {
-            synced_lrc: body.synced_lyrics,
-            plain_text: body.plain_lyrics,
+            synced_lrc: best.synced_lyrics,
+            plain_text: best.plain_lyrics,
             source: "lrclib".to_string(),
         })
     }.await;
@@ -4629,6 +4768,10 @@ pub fn run() {
             clear_artwork_cache,
             get_artist_image,
             get_artist_banner,
+            is_artist_banner_custom,
+            set_artist_banner_custom,
+            set_artist_banner_from_base64,
+            clear_artist_banner_custom,
             fetch_artist_images,
             pause_artist_image_download,
             resume_artist_image_download,
@@ -4648,6 +4791,7 @@ pub fn run() {
             set_playlist_cover,
             get_lyrics,
             set_lyrics,
+            clear_lyrics_cache,
             read_text_file,
             write_text_file,
             fetch_missing_metadata,

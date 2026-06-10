@@ -50,7 +50,34 @@ export function AudioPlayer() {
   const [queueOpen, setQueueOpen] = useState(false);
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false);
+  const [activePanel, setActivePanel] = useState<'queue' | 'lyrics' | null>(null);
   const eqRef = useRef<HTMLDivElement>(null);
+
+  // Always-fresh handlers — refs let the keyboard effect call them without stale closures
+  const handleQueueClickRef = useRef<() => void>(() => {});
+  const handleLyricsClickRef = useRef<() => void>(() => {});
+  handleQueueClickRef.current = () => {
+    if (!queueOpen) {
+      setQueueOpen(true);
+      setActivePanel('queue');
+    } else if (activePanel === 'queue') {
+      setQueueOpen(false);
+      setActivePanel(lyricsOpen ? 'lyrics' : null);
+    } else {
+      setActivePanel('queue');
+    }
+  };
+  handleLyricsClickRef.current = () => {
+    if (!lyricsOpen) {
+      setLyricsOpen(true);
+      setActivePanel('lyrics');
+    } else if (activePanel === 'lyrics') {
+      setLyricsOpen(false);
+      setActivePanel(queueOpen ? 'queue' : null);
+    } else {
+      setActivePanel('lyrics');
+    }
+  };
 
   useEffect(() => {
     if (!eqOpen) return;
@@ -89,7 +116,7 @@ export function AudioPlayer() {
       else if (matches("seek-forward")) { e.preventDefault(); seek(Math.min(progress + 5, duration)); }
       else if (matches("seek-back"))    { e.preventDefault(); seek(Math.max(progress - 5, 0)); }
       else if (matches("now-playing"))  { e.preventDefault(); setNowPlayingOpen((v) => !v); }
-      else if (matches("queue"))        { e.preventDefault(); setQueueOpen((v) => !v); }
+      else if (matches("queue"))        { e.preventDefault(); handleQueueClickRef.current(); }
       else if (matches("equalizer"))    { e.preventDefault(); setEqOpen((v) => !v); }
       else if (matches("mute"))         { e.preventDefault(); toggleMute(); }
     }
@@ -258,7 +285,7 @@ export function AudioPlayer() {
 
           {/* Lyrics button */}
           <button
-            onClick={() => setLyricsOpen((v) => !v)}
+            onClick={() => handleLyricsClickRef.current()}
             className={`p-1.5 rounded-md transition-colors ${
               lyricsOpen ? "text-[var(--accent)] bg-[var(--accent-a10)]" : "text-[#3a3628] hover:text-[#7a7060]"
             }`}
@@ -272,7 +299,7 @@ export function AudioPlayer() {
           {/* Queue button */}
           <Tooltip label="Queue" shortcut={fmtKey(keyBindings["queue"])} altShortcut={keyBindings2["queue"] ? fmtKey(keyBindings2["queue"]) : undefined}>
           <button
-            onClick={() => setQueueOpen((v) => !v)}
+            onClick={() => handleQueueClickRef.current()}
             className={`relative p-1.5 rounded-md transition-colors ${
               queueOpen ? "text-[var(--accent)] bg-[var(--accent-a10)]" : "text-[#3a3628] hover:text-[#7a7060]"
             }`}
@@ -308,8 +335,44 @@ export function AudioPlayer() {
         </div>
       </div>
 
-      <QueuePanel open={queueOpen} onClose={() => setQueueOpen(false)} />
-      <LyricsPanel open={lyricsOpen} onClose={() => setLyricsOpen(false)} progress={progress} seek={seek} />
+      <QueuePanel
+        open={queueOpen}
+        onClose={() => { setQueueOpen(false); setActivePanel(lyricsOpen ? 'lyrics' : null); }}
+        isOnTop={activePanel === 'queue'}
+        onBringToFront={() => setActivePanel('queue')}
+      />
+      <LyricsPanel
+        open={lyricsOpen}
+        onClose={() => { setLyricsOpen(false); setActivePanel(queueOpen ? 'queue' : null); }}
+        isOnTop={activePanel === 'lyrics'}
+        onBringToFront={() => setActivePanel('lyrics')}
+        progress={progress}
+        seek={seek}
+      />
+
+      {/* Tab switcher — visible when both panels are open, sits just left of the stacked panels */}
+      {queueOpen && lyricsOpen && (
+        <div className="fixed right-80 top-1/2 -translate-y-1/2 z-[53] flex flex-col py-1 px-0.5 bg-[#1a1814] border border-white/8 border-r-0 rounded-l-lg shadow-xl">
+          <button
+            onClick={() => setActivePanel('lyrics')}
+            title="Lyrics"
+            className={`p-2 rounded-md transition-colors ${activePanel === 'lyrics' ? 'text-[var(--accent)]' : 'text-[#3a3628] hover:text-[#7a7060]'}`}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+            </svg>
+          </button>
+          <button
+            onClick={() => setActivePanel('queue')}
+            title="Queue"
+            className={`p-2 rounded-md transition-colors ${activePanel === 'queue' ? 'text-[var(--accent)]' : 'text-[#3a3628] hover:text-[#7a7060]'}`}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/>
+            </svg>
+          </button>
+        </div>
+      )}
       <NowPlayingView
         open={nowPlayingOpen}
         onClose={() => setNowPlayingOpen(false)}
