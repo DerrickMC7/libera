@@ -22,7 +22,7 @@ export function BookRow({ book, index, onClick }: BookRowProps) {
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.15, delay: index * 0.02 }}
-      className="grid grid-cols-[1fr_80px_80px] gap-4 px-4 py-3 rounded-lg cursor-pointer hover:bg-[#1f1d18] transition-colors"
+      className="grid grid-cols-[1fr_60px_60px] sm:grid-cols-[1fr_80px_80px] gap-4 px-4 py-3 rounded-lg cursor-pointer hover:bg-[#1f1d18] transition-colors"
     >
       <div className="min-w-0 flex items-center gap-3">
         {/* Cover thumbnail */}

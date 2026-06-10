@@ -52,13 +52,13 @@ export function Shell() {
   }
 
   return (
-    <div className="flex-1 overflow-hidden grid grid-cols-[52px_1fr] min-h-0">
+    <div className="flex-1 overflow-hidden flex flex-col-reverse sm:flex-row min-h-0">
       <NavRail
         activeSection={activeSection}
         onNavigate={handleNavigate}
         disabled={isProcessing && isFirstTime}
       />
-      <main className="overflow-hidden h-full flex flex-col">
+      <main className="overflow-hidden flex-1 min-h-0 flex flex-col">
         <CacheProgress />
 
         <div className="flex-1 overflow-hidden">

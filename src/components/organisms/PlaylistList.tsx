@@ -278,7 +278,7 @@ export function PlaylistList({ onOpen }: { onOpen: (id: number) => void }) {
   function closeCtx() { setCtxMenu(null); }
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto px-10 py-6" onClick={closeCtx}>
+    <div className="flex flex-col h-full overflow-y-auto px-4 sm:px-10 py-4 sm:py-6" onClick={closeCtx}>
       {/* New playlist button */}
       <div className="mb-8">
         {creating ? (

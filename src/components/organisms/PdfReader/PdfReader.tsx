@@ -213,13 +213,15 @@ const {
         onClose={handleCloseSearch}
       />
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {tocVisible && toc.length > 0 && (
-          <PdfSidebar
-            toc={toc}
-            currentPage={currentPage}
-            onNavigate={(page) => setScrollToPage(page)}
-          />
+          <div className="absolute sm:relative z-10 h-full sm:h-auto">
+            <PdfSidebar
+              toc={toc}
+              currentPage={currentPage}
+              onNavigate={(page) => { setScrollToPage(page); if (window.innerWidth < 640) setTocVisible(false); }}
+            />
+          </div>
         )}
 
         <PdfCanvas

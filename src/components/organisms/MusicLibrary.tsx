@@ -243,13 +243,13 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
-      <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="mb-7">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
+        <div className="mb-4 sm:mb-7">
           <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
             Your Collection
           </p>
           <h1
-            className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+            className="text-[28px] sm:text-[42px] leading-none tracking-[-1px] sm:tracking-[-1.5px] text-[#faf8f2] font-light"
             style={{ fontFamily: "Fraunces, serif" }}
           >
             Music{" "}
@@ -258,7 +258,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
         </div>
 
         {/* View tabs */}
-        <div className="flex gap-1 mb-6">
+        <div className="flex gap-1 mb-4 sm:mb-6 overflow-x-auto pb-1 scrollbar-none">
           {views.map((v) => (
             <button
               key={v}
@@ -297,6 +297,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+                  style={{ fontSize: "16px" }}
                 />
               </Tooltip>
             </div>
@@ -332,7 +333,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
         >
           <div
             ref={scrollRef}
-            className="flex-1 overflow-y-auto px-10 py-4"
+            className="flex-1 overflow-y-auto px-4 sm:px-10 py-4"
             onScroll={handleScroll}
           >
             {totalCount === 0 && (

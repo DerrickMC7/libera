@@ -19,7 +19,7 @@ export function PdfToolbar({
   onZoomIn, onZoomOut, onToggleToc, onPopOut, onClose, onOpenSearch,
 }: PdfToolbarProps) {
   return (
-    <div className="flex items-center gap-3 px-5 py-2.5 bg-[#161410] border-b border-white/5 shrink-0">
+    <div className="flex items-center gap-1.5 sm:gap-3 px-2 sm:px-5 py-2.5 bg-[#161410] border-b border-white/5 shrink-0">
       {/* Back button */}
       <button
         onClick={onClose}
@@ -48,11 +48,12 @@ export function PdfToolbar({
 
       {/* Title */}
       <span
-        className="flex-1 text-[13px] text-[#c8bfa8] truncate"
+        className="hidden sm:block flex-1 text-[13px] text-[#c8bfa8] truncate"
         style={{ fontFamily: "Georgia, serif" }}
       >
         {title}
       </span>
+      <span className="flex-1 sm:hidden" />
 
       {/* Page info */}
       <span className="text-[11px] font-mono text-[#3a3628] shrink-0">
@@ -82,7 +83,7 @@ export function PdfToolbar({
       {/* Pop out */}
       <button
         onClick={onPopOut}
-        className="p-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors"
+        className="hidden sm:block p-1.5 text-[#7a7060] hover:text-[#c8bfa8] transition-colors"
         title="Open in separate window"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">

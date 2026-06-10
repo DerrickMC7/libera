@@ -63,14 +63,14 @@ export function BookLibrary() {
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
-      <div className="px-10 pt-9 pb-0 sticky top-0 bg-[#0e0d0b] z-10">
-        <div className="flex items-end justify-between mb-7">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-0 sticky top-0 bg-[#0e0d0b] z-10">
+        <div className="flex items-end justify-between mb-4 sm:mb-7">
           <div>
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
               Your Collection
             </p>
             <h1
-              className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+              className="text-[28px] sm:text-[42px] leading-none tracking-[-1px] sm:tracking-[-1.5px] text-[#faf8f2] font-light"
               style={{ fontFamily: "Fraunces, serif" }}
             >
               Books <em className="italic text-[#c8bfa8] font-light">& papers</em>
@@ -92,11 +92,12 @@ export function BookLibrary() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)]/40 mb-6 transition-colors"
+            style={{ fontSize: "16px" }}
           />
         </Tooltip>
 
         {/* Column headers */}
-        <div className="grid grid-cols-[1fr_80px_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
+        <div className="grid grid-cols-[1fr_60px_60px] sm:grid-cols-[1fr_80px_80px] gap-4 px-4 pb-2 border-b border-white/6 text-[11px] font-mono tracking-widest uppercase text-[#3a3628]">
           <span>Title</span>
           <span>Format</span>
           <span className="text-right">Size</span>
@@ -104,7 +105,7 @@ export function BookLibrary() {
       </div>
 
       {/* Book list */}
-      <div className="flex-1 overflow-y-auto px-10 py-4">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-10 py-4">
         {isLoading && (
           <p className="text-center text-[#3a3628] text-sm mt-20">
             Loading library...

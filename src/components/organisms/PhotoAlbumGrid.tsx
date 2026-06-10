@@ -83,7 +83,7 @@ export function PhotoAlbumGrid() {
 
   if (isLoading) {
     return (
-      <div className="px-10 py-4 grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
+      <div className="px-4 sm:px-10 py-4 grid gap-5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
         {Array.from({ length: 8 }).map((_, i) => (
           <div key={i} className="flex flex-col gap-2">
             <div className="rounded-xl aspect-square bg-[#1a1814] animate-pulse" />
@@ -96,7 +96,7 @@ export function PhotoAlbumGrid() {
   }
 
   return (
-    <div className="overflow-y-auto h-full px-10 py-4">
+    <div className="overflow-y-auto h-full px-4 sm:px-10 py-4">
       {/* Smart albums */}
       <div className="mb-6">
         <p className="text-[10px] font-mono text-[#3a3628] tracking-widest uppercase mb-2.5">Smart Albums</p>
@@ -208,14 +208,15 @@ export function PhotoAlbumGrid() {
       ) : (
         <>
           {/* Folder albums header + search/sort */}
-          <div className="mb-5 flex items-center gap-3">
+          <div className="mb-5 flex flex-wrap items-center gap-3">
             <p className="text-[10px] font-mono text-[#3a3628] tracking-widest uppercase mr-2">Folder Albums</p>
             <input
               type="text"
               placeholder="Search albums…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="flex-1 max-w-xs bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+              className="flex-1 min-w-[140px] max-w-xs bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+              style={{ fontSize: "16px" }}
             />
             <div className="flex items-center border border-white/7 rounded-lg overflow-hidden shrink-0">
               {(["name", "count"] as AlbumSort[]).map((s, i) => (

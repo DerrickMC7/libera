@@ -69,7 +69,7 @@ const PhotoListRow = memo(function PhotoListRow({
 
   return (
     <div
-      className={`flex items-center gap-4 px-10 py-2 cursor-pointer group hover:bg-white/4 transition-colors ${isSelected ? "bg-[var(--accent-a10)]" : ""}`}
+      className={`flex items-center gap-2 sm:gap-4 px-4 sm:px-10 py-2 cursor-pointer group hover:bg-white/4 transition-colors ${isSelected ? "bg-[var(--accent-a10)]" : ""}`}
       style={{ height: LIST_ROW_H }}
       data-photo-path={photo.path}
       onMouseEnter={() => setRowHovered(true)}
@@ -216,7 +216,7 @@ function PhotoListView({
   return (
     <div className="h-full flex flex-col relative">
       {/* Header row */}
-      <div className="flex items-center gap-4 px-10 py-2 border-b border-white/5 shrink-0">
+      <div className="flex items-center gap-2 sm:gap-4 px-4 sm:px-10 py-2 border-b border-white/5 shrink-0">
         <div className="w-[38px] shrink-0" />
         <div className="flex-1 text-[10px] font-mono text-[#3a3628] tracking-wider uppercase">Name</div>
         <div className="w-28 shrink-0 hidden md:block text-[10px] font-mono text-[#3a3628] tracking-wider uppercase">Date</div>
@@ -249,7 +249,7 @@ function PhotoListView({
                 {photo ? (
                   <PhotoListRow photo={photo} index={vRow.index} allPhotos={photos} onShiftSelect={onShiftSelect} />
                 ) : (
-                  <div className="h-[52px] px-10 flex items-center gap-4">
+                  <div className="h-[52px] px-4 sm:px-10 flex items-center gap-4">
                     <div className="w-[38px] h-[38px] rounded bg-[#1a1814] animate-pulse shrink-0" />
                     <div className="flex-1 h-4 rounded bg-[#1a1814] animate-pulse" />
                     <div className="w-28 h-3 rounded bg-[#1a1814] animate-pulse hidden md:block shrink-0" />
@@ -312,8 +312,11 @@ function PhotoMasonryView({
   // Compute column count and photo positions
   const { positions, totalHeight, cols } = useMemo(() => {
     if (!containerWidth) return { positions: [], totalHeight: 0, cols: 1 };
-    const numCols = Math.max(2, Math.floor((containerWidth + MASONRY_GAP) / (MASONRY_COL_WIDTH + MASONRY_GAP)));
-    const colWidth = (containerWidth - (numCols - 1) * MASONRY_GAP) / numCols;
+    const isMobile = window.innerWidth < 640;
+    const padding = isMobile ? 32 : 80;
+    const usableW = containerWidth - padding;
+    const numCols = Math.max(isMobile ? 3 : 2, Math.floor((usableW + MASONRY_GAP) / (MASONRY_COL_WIDTH + MASONRY_GAP)));
+    const colWidth = (usableW - (numCols - 1) * MASONRY_GAP) / numCols;
     const colHeights = new Array(numCols).fill(0) as number[];
     const pos: { x: number; y: number; w: number; h: number }[] = [];
 
@@ -375,7 +378,7 @@ function PhotoMasonryView({
     <div ref={containerRef} className="h-full flex flex-col relative">
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-10 py-4"
+        className="flex-1 overflow-y-auto px-4 sm:px-10 py-4"
         onScroll={handleScroll}
       >
         <div style={{ position: "relative", height: totalHeight }}>
@@ -512,6 +515,7 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
+  const [effectiveCardSize, setEffectiveCardSize] = useState(cardSize);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [focusedIdx, setFocusedIdx] = useState<number | null>(null);
   const { openLightbox, selectionAnchor, selectRange } = usePhotoStore();
@@ -550,7 +554,18 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
     if (!el) return;
     const measure = () => {
       const w = el.clientWidth;
-      setCols(Math.max(2, Math.floor((w + GAP) / (cardSize + GAP))));
+      const isMobile = window.innerWidth < 640;
+      // Subtract scroll-area padding (px-4 on mobile = 32px, px-10 on desktop = 80px)
+      const usableW = w - (isMobile ? 32 : 80);
+      const minCols = isMobile ? 3 : 2;
+      const naturalCols = Math.max(1, Math.floor((usableW + GAP) / (cardSize + GAP)));
+      const finalCols = Math.max(minCols, naturalCols);
+      setCols(finalCols);
+      // When forcing more cols than natural, fill the row; otherwise use requested cardSize
+      const eff = finalCols > naturalCols
+        ? Math.floor((usableW - (finalCols - 1) * GAP) / finalCols)
+        : cardSize;
+      setEffectiveCardSize(eff);
     };
     const obs = new ResizeObserver(measure);
     obs.observe(el);
@@ -564,7 +579,7 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
   const virtualizer = useVirtualizer({
     count: rows,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => cardSize + GAP,
+    estimateSize: () => effectiveCardSize + GAP,
     overscan: 3,
   });
 
@@ -572,7 +587,7 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
     setShowScrollTop(scrollTop > 400);
-    if (scrollHeight - scrollTop - clientHeight < cardSize * 2 && photos.length < total) {
+    if (scrollHeight - scrollTop - clientHeight < effectiveCardSize * 2 && photos.length < total) {
       onLoadMore?.();
     }
   }
@@ -638,7 +653,7 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
     <div ref={containerRef} className="h-full flex flex-col relative">
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-10 py-4 outline-none"
+        className="flex-1 overflow-y-auto px-4 sm:px-10 py-4 outline-none"
         onScroll={handleScroll}
         tabIndex={0}
         onKeyDown={handleGridKey}
@@ -675,7 +690,7 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
                 const globalIdx = vRow.index * cols + colIdx;
                 if (globalIdx >= total) return null;
                 if (!photo) {
-                  return <SkeletonCard key={colIdx} size={cardSize} />;
+                  return <SkeletonCard key={colIdx} size={effectiveCardSize} />;
                 }
                 const isFocused = focusedIdx === globalIdx;
                 return (
@@ -688,7 +703,7 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
                   >
                     <PhotoCard
                       photo={photo}
-                      size={cardSize}
+                      size={effectiveCardSize}
                       onClick={() => openLightbox(photos, globalIdx)}
                       onFavoriteToggle={(e) => {
                         e.stopPropagation();

@@ -26,7 +26,8 @@ function SkeletonCard({ opacity }: { opacity: number }) {
 }
 
 function calcColumns(width: number) {
-  return Math.max(1, Math.floor((width + GAP) / (CARD_MIN_WIDTH + GAP)));
+  const minCols = window.innerWidth < 640 ? 2 : 1;
+  return Math.max(minCols, Math.floor((width + GAP) / (CARD_MIN_WIDTH + GAP)));
 }
 
 function calcCardWidth(width: number, cols: number) {
@@ -128,13 +129,13 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b]">
       {/* Header */}
-      <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="mb-7">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
+        <div className="mb-4 sm:mb-7">
           <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
             Your Collection
           </p>
           <h1
-            className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+            className="text-[28px] sm:text-[42px] leading-none tracking-[-1px] sm:tracking-[-1.5px] text-[#faf8f2] font-light"
             style={{ fontFamily: "Fraunces, serif" }}
           >
             Albums{" "}
@@ -144,7 +145,7 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
           </h1>
         </div>
 
-        <div className="flex gap-3 mb-6">
+        <div className="flex gap-3 mb-4 sm:mb-6">
           <Tooltip shortcut="Ctrl+F">
             <input
               ref={searchInputRef}
@@ -153,6 +154,7 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="flex-1 bg-[#1f1d18] border border-white/7 rounded-lg px-4 py-2.5 text-sm text-[#f0ead8] placeholder-[#3a3628] outline-none focus:border-[var(--accent)] transition-colors"
+              style={{ fontSize: "16px" }}
             />
           </Tooltip>
           <div className="flex gap-1 shrink-0">
@@ -174,7 +176,7 @@ export function AlbumGrid({ active = true, onDetailChange }: AlbumGridProps) {
       </div>
 
       {/* Grid */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-10 py-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-10 py-4">
         <div ref={gridRef} className="w-full">
 
           {isLoading && (

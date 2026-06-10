@@ -70,7 +70,7 @@ export function PhotoDuplicates() {
   }
 
   return (
-    <div className="overflow-y-auto h-full px-10 py-6">
+    <div className="overflow-y-auto h-full px-4 sm:px-10 py-4 sm:py-6">
       {/* Summary banner */}
       <div className="mb-6 flex items-center gap-4 p-4 rounded-xl bg-[#1a1814] border border-white/8">
         <div className="flex-1">

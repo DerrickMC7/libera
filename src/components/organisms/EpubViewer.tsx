@@ -8,7 +8,7 @@ interface EpubViewerProps {
 export function EpubViewer({ book, onClose }: EpubViewerProps) {
   return (
     <div className="fixed inset-0 bg-[#1a1814] z-50 flex flex-col">
-      <div className="flex items-center px-6 py-4 border-b border-white/5 bg-[#161410]">
+      <div className="flex items-center px-3 sm:px-6 py-3 sm:py-4 border-b border-white/5 bg-[#161410]">
         <button
           onClick={onClose}
           className="text-[#7a7060] hover:text-[#c8bfa8] transition-colors cursor-pointer"

@@ -469,14 +469,14 @@ export function PhotoLibrary() {
       </AnimatePresence>
 
       {/* Header */}
-      <div className="px-10 pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
-        <div className="mb-7 flex items-end justify-between">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-9 pb-0 bg-[#0e0d0b] z-10 shrink-0">
+        <div className="mb-4 sm:mb-7 flex items-end justify-between">
           <div>
             <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-1.5">
               Your Collection
             </p>
             <h1
-              className="text-[42px] leading-none tracking-[-1.5px] text-[#faf8f2] font-light"
+              className="text-[28px] sm:text-[42px] leading-none tracking-[-1px] sm:tracking-[-1.5px] text-[#faf8f2] font-light"
               style={{ fontFamily: "Fraunces, serif" }}
             >
               Pictures{" "}
@@ -485,9 +485,9 @@ export function PhotoLibrary() {
           </div>
 
           {/* Stats + Add */}
-          <div className="flex items-center gap-4 mb-1">
+          <div className="flex items-center gap-2 sm:gap-4 mb-1">
             {stats && (
-              <div className="flex gap-4 text-xs text-[#5a5244] font-mono">
+              <div className="hidden sm:flex gap-4 text-xs text-[#5a5244] font-mono">
                 <span>{stats.total.toLocaleString()} photos</span>
                 <span>{stats.albums} albums</span>
                 <span>{stats.favorites} favorites</span>
@@ -508,7 +508,7 @@ export function PhotoLibrary() {
         </div>
 
         {/* View tabs */}
-        <div className="flex gap-1 mb-5">
+        <div className="flex gap-1 mb-3 sm:mb-5 overflow-x-auto pb-1 scrollbar-none">
           {views.map((v) => (
             <button
               key={v.id}
@@ -534,14 +534,15 @@ export function PhotoLibrary() {
 
         {/* Search + filters (shown in non-special views) */}
         {!isAlbumsView && !isTagsView && !isDuplicatesView && !isCollectionsView && !isMapView && !isStatsView && (
-          <div className="flex gap-3 mb-4 flex-wrap">
-            <div className="relative flex-1 min-w-[200px]">
+          <div className="flex gap-3 mb-4 flex-wrap overflow-x-auto pb-1 scrollbar-none">
+            <div className="relative flex-1 min-w-[160px] sm:min-w-[200px]">
               <Tooltip shortcut="Ctrl+F">
                 <input
                   ref={searchRef}
                   type="text"
                   placeholder="Search photos… or #tag"
                   value={localSearch}
+                  style={{ fontSize: "16px" }}
                   onChange={(e) => setLocalSearch(e.target.value)}
                   onFocus={() => setShowSearchHistory(true)}
                   onBlur={() => setTimeout(() => setShowSearchHistory(false), 150)}
@@ -1155,7 +1156,7 @@ export function PhotoLibrary() {
             </AnimatePresence>
 
 
-            <div className="flex items-center justify-between px-8 py-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-4 sm:px-8 py-2 sm:py-3 gap-2">
               <div className="flex items-center gap-3">
                 <span className="text-[#c8bfa8] text-sm font-mono">
                   {selectedPaths.size} {selectedPaths.size === 1 ? "photo" : "photos"} selected
@@ -1167,7 +1168,7 @@ export function PhotoLibrary() {
                   Select all ({total})
                 </button>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
                 <button
                   disabled={selectedPaths.size === 0}
                   onClick={() => {
@@ -1640,7 +1641,7 @@ function TagsView({ tags, onTagClick }: { tags: string[]; onTagClick: (tag: stri
   });
 
   return (
-    <div className="overflow-y-auto h-full px-10 py-4">
+    <div className="overflow-y-auto h-full px-4 sm:px-10 py-4">
       <div className="mb-5 flex items-center gap-3 flex-wrap">
         <input
           type="text"
@@ -1815,7 +1816,7 @@ function PhotoTimelineGrouped({
   return (
     <div className="relative h-full flex flex-col overflow-hidden">
       {/* Year header */}
-      <div className="px-10 pt-4 pb-3 shrink-0 flex items-center gap-3">
+      <div className="px-4 sm:px-10 pt-4 pb-3 shrink-0 flex items-center gap-3">
         <button
           onClick={onBackToYears}
           className="flex items-center gap-1.5 text-[11px] font-mono text-[#5a5244] hover:text-[var(--accent)] transition-colors"
@@ -1829,7 +1830,7 @@ function PhotoTimelineGrouped({
         <h2 className="text-[#c8bfa8] text-lg font-medium" style={{ fontFamily: "Fraunces, serif" }}>{year}</h2>
         <span className="text-[#3a3628] text-xs font-mono">{months.length} month{months.length !== 1 ? "s" : ""}</span>
       </div>
-      <div ref={scrollRef} className="overflow-y-auto flex-1 px-10 pb-4">
+      <div ref={scrollRef} className="overflow-y-auto flex-1 px-4 sm:px-10 pb-4">
         {[...months].sort((a, b) => b - a).map((month) => (
           <MonthTimelineSection
             key={month}

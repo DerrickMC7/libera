@@ -115,7 +115,7 @@ export function PlaylistCoverModal({ playlistId, onClose }: { playlistId: number
         exit={{ scale: 0.94, opacity: 0, y: 12 }}
         transition={{ type: "spring", stiffness: 400, damping: 36 }}
         onClick={(e) => e.stopPropagation()}
-        className="relative z-10 bg-[#161410] border border-white/8 rounded-2xl shadow-2xl p-6 w-[400px]"
+        className="relative z-10 bg-[#161410] border border-white/8 rounded-2xl shadow-2xl p-4 sm:p-6 w-[calc(100vw-2rem)] sm:w-[400px] max-w-[400px]"
       >
         <div className="flex items-center justify-between mb-5">
           <h3 className="text-base text-[#f0ead8]" style={{ fontFamily: "Fraunces, serif" }}>Change Cover</h3>

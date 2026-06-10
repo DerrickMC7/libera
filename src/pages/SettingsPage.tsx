@@ -224,13 +224,14 @@ export function SettingsPage() {
   ];
 
   return (
-    <div className="flex h-full bg-[#0e0d0b]">
-      {/* Sidebar */}
-      <div className="w-48 shrink-0 border-r border-white/5 pt-9 px-4">
-        <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-4 px-2">
+    <div className="flex flex-col sm:flex-row h-full bg-[#0e0d0b]">
+      {/* Sidebar (desktop) / Tab bar (mobile) */}
+      <div className="sm:w-48 sm:shrink-0 sm:border-r sm:border-b-0 border-b border-white/5 sm:pt-9 pt-3 px-4 sm:px-4 bg-[#0e0d0b]">
+        <p className="hidden sm:block font-mono text-[9px] tracking-[0.18em] uppercase text-[var(--accent)] mb-4 px-2">
           Settings
         </p>
-        <nav className="flex flex-col gap-0.5">
+        {/* Desktop: vertical nav */}
+        <nav className="hidden sm:flex flex-col gap-0.5">
           {sections.map((s) => (
             <button
               key={s.id}
@@ -248,10 +249,29 @@ export function SettingsPage() {
             </button>
           ))}
         </nav>
+        {/* Mobile: icon-only equal-width tabs */}
+        <div className="flex sm:hidden">
+          {sections.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setActiveSection(s.id)}
+              title={s.label}
+              className={`flex-1 flex flex-col items-center gap-1 py-2.5 transition-colors border-b-2 ${
+                activeSection === s.id
+                  ? "text-[var(--accent)] border-[var(--accent)]"
+                  : "text-[#3a3628] hover:text-[#7a7060] border-transparent"
+              }`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d={s.icon} />
+              </svg>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-10 pt-9 pb-10">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-10 pt-4 sm:pt-9 pb-10">
         {feedback && (
           <div className="fixed top-4 right-4 bg-[var(--accent)] text-white text-xs px-4 py-2 rounded-lg font-mono z-50">
             {feedback}
@@ -266,7 +286,7 @@ export function SettingsPage() {
             </h2>
             <p className="text-[#3a3628] text-xs font-mono mb-8">Manage your scanned content</p>
 
-            <div className="flex items-center justify-between p-4 rounded-xl bg-[#161410] border border-white/5 mb-10">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-[#161410] border border-white/5 mb-10">
               <div>
                 <p className="text-sm text-[#f0ead8]">Add music folder</p>
                 <p className="text-xs text-[#3a3628] mt-0.5">Scan a folder and add its tracks to your library</p>
@@ -274,7 +294,7 @@ export function SettingsPage() {
               <button
                 onClick={handleAddFolder}
                 disabled={isScanning}
-                className="text-xs px-3 py-1.5 rounded-lg bg-[var(--accent)] font-mono hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-xs px-3 py-1.5 rounded-lg bg-[var(--accent)] font-mono hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[80px] text-center"
                 style={{ color: "var(--accent-on)" }}
               >
                 {isScanning ? "Scanning..." : "Add folder"}
@@ -282,7 +302,7 @@ export function SettingsPage() {
             </div>
 
             {/* Photos folder */}
-            <div className="flex items-center justify-between p-4 rounded-xl bg-[#161410] border border-white/5 mb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-[#161410] border border-white/5 mb-4">
               <div>
                 <p className="text-sm text-[#f0ead8]">Add photos folder</p>
                 <p className="text-xs text-[#3a3628] mt-0.5">Scan a folder for images and add them to your picture library</p>
@@ -290,7 +310,7 @@ export function SettingsPage() {
               <button
                 onClick={handleAddPhotosFolder}
                 disabled={isScanningPhotos}
-                className="text-xs px-3 py-1.5 rounded-lg bg-[var(--accent)] font-mono hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-xs px-3 py-1.5 rounded-lg bg-[var(--accent)] font-mono hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[80px] text-center"
                 style={{ color: "var(--accent-on)" }}
               >
                 {isScanningPhotos ? "Scanning..." : "Add folder"}
@@ -318,7 +338,7 @@ export function SettingsPage() {
                   <button
                     onClick={metadataFetch.start}
                     disabled={metadataFetch.isRunning}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-[var(--accent)] font-mono hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="text-xs px-3 py-1.5 rounded-lg bg-[var(--accent)] font-mono hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed min-w-[80px] text-center"
                     style={{ color: "var(--accent-on)" }}
                   >
                     {metadataFetch.isRunning ? "Running…" : "Fetch"}
@@ -381,22 +401,22 @@ export function SettingsPage() {
                 { id: "all",            label: "Clear everything",            desc: "Removes all content and deletes artwork cache files", danger: true },
                 { id: "wipe",           label: "Delete all app data",         desc: "Wipes database, all cached images, and artist photos — for a clean uninstall", danger: true },
               ].map((item) => (
-                <div key={item.id} className="flex items-center justify-between p-4 rounded-xl bg-[#161410] border border-white/5">
+                <div key={item.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-4 rounded-xl bg-[#161410] border border-white/5">
                   <div>
                     <p className="text-sm text-[#f0ead8]">{item.label}</p>
                     <p className="text-xs text-[#3a3628] mt-0.5">{item.desc}</p>
                   </div>
                   {confirmClear === item.id ? (
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 sm:shrink-0">
                       <button
                         onClick={() => handleClearLibrary(item.id as any)}
-                        className="text-xs px-3 py-1.5 rounded-lg bg-[#c85858] text-white font-mono hover:bg-[#d96868] transition-colors"
+                        className="flex-1 sm:flex-none text-xs px-3 py-1.5 rounded-lg bg-[#c85858] text-white font-mono hover:bg-[#d96868] transition-colors text-center"
                       >
                         Confirm
                       </button>
                       <button
                         onClick={() => setConfirmClear(null)}
-                        className="text-xs px-3 py-1.5 rounded-lg bg-[#2a2820] text-[#7a7060] font-mono hover:text-[#c8bfa8] transition-colors"
+                        className="flex-1 sm:flex-none text-xs px-3 py-1.5 rounded-lg bg-[#2a2820] text-[#7a7060] font-mono hover:text-[#c8bfa8] transition-colors text-center"
                       >
                         Cancel
                       </button>
@@ -404,7 +424,7 @@ export function SettingsPage() {
                   ) : (
                     <button
                       onClick={() => setConfirmClear(item.id)}
-                      className="text-xs px-3 py-1.5 rounded-lg bg-[#2a2820] text-[#c85858] font-mono hover:bg-[#c85858]/10 transition-colors"
+                      className="text-xs px-3 py-1.5 rounded-lg bg-[#2a2820] text-[#c85858] font-mono hover:bg-[#c85858]/10 transition-colors sm:shrink-0 text-center"
                     >
                       Clear
                     </button>

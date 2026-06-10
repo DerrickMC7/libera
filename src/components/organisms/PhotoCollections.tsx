@@ -31,7 +31,7 @@ function CollectionDetail({ collection, onBack }: { collection: PhotoCollection;
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      <div className="px-10 pt-6 pb-4 shrink-0">
+      <div className="px-4 sm:px-10 pt-4 sm:pt-6 pb-4 shrink-0">
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 text-[11px] font-mono text-[#5a5244] hover:text-[var(--accent)] transition-colors mb-4"
@@ -89,7 +89,7 @@ function CollectionDetail({ collection, onBack }: { collection: PhotoCollection;
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-10 pb-6">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-10 pb-6">
         {isLoading ? (
           <div className="flex justify-center pt-12">
             <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
@@ -199,7 +199,7 @@ export function PhotoCollections() {
   }
 
   return (
-    <div className="overflow-y-auto h-full px-10 py-6">
+    <div className="overflow-y-auto h-full px-4 sm:px-10 py-4 sm:py-6">
       {/* Header actions */}
       <div className="flex items-center justify-between mb-6">
         <p className="text-[#5a5244] text-xs font-mono">

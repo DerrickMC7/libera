@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Track } from "../../types/track";
 import { useArtwork } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
@@ -6,6 +6,17 @@ import { useToastStore } from "../../store/toastStore";
 import { useContextMenuStore } from "../../store/contextMenuStore";
 import { useNavigationStore } from "../../store/navigationStore";
 import { ArtistLinks } from "../atoms/ArtistLinks";
+
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => window.innerWidth < 640);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return mobile;
+}
 
 function fmt(secs: number) {
   const m = Math.floor(secs / 60);
@@ -91,6 +102,9 @@ export function TrackRow({
   onDragEnd,
 }: TrackRowProps) {
   const [hovered, setHovered] = useState(false);
+  const isMobile = useIsMobile();
+  const effectiveShowArtistColumn = showArtistColumn && !isMobile;
+  const effectiveShowAlbumColumn = showAlbumColumn && !isMobile;
   const { playNext, addToQueue } = usePlayerStore();
   const { show: showToast } = useToastStore();
   const showContextMenu = useContextMenuStore((s) => s.show);
@@ -113,7 +127,7 @@ export function TrackRow({
       className={`grid h-12 items-center gap-3 px-4 rounded-lg cursor-pointer select-none transition-colors ${
         isActive ? "bg-[var(--accent-a08)]" : "hover:bg-[#1f1d18]"
       } ${isDragging ? "opacity-40" : ""}`}
-      style={{ gridTemplateColumns: trackRowColumns({ showDragHandle, showTrackNumber, showArtwork, showArtistColumn, showAlbumColumn }) }}
+      style={{ gridTemplateColumns: trackRowColumns({ showDragHandle, showTrackNumber, showArtwork, showArtistColumn: effectiveShowArtistColumn, showAlbumColumn: effectiveShowAlbumColumn }) }}
     >
       {/* Drag handle */}
       {showDragHandle && (
@@ -148,20 +162,20 @@ export function TrackRow({
         <p className={`text-sm leading-snug truncate ${isActive ? "text-[var(--accent)]" : "text-[#f0ead8]"}`}>
           {track.title}
         </p>
-        {!showArtistColumn && (
+        {!effectiveShowArtistColumn && (
           <p className="text-[11px] text-[#5a5448] truncate">{track.artist}</p>
         )}
       </div>
 
       {/* Artist column */}
-      {showArtistColumn && (
+      {effectiveShowArtistColumn && (
         <p className="text-sm text-[#7a7060] truncate">
           <ArtistLinks artist={track.artist} />
         </p>
       )}
 
       {/* Album column */}
-      {showAlbumColumn && (
+      {effectiveShowAlbumColumn && (
         <p
           className="text-sm text-[#7a7060] truncate hover:text-[var(--accent)] cursor-pointer transition-colors"
           onClick={(e) => { e.stopPropagation(); navigateToAlbum(track.album, track.album_artist); }}
