@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { usePlaylists, useCreatePlaylist, useDeletePlaylist, useRenamePlaylist } from "../../hooks/usePlaylist";
 import { useArtwork } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
+import { useToastStore } from "../../store/toastStore";
 import { PlaylistCoverModal } from "./PlaylistCoverModal";
 import { Playlist } from "../../types/playlist";
 import { Track } from "../../types/track";
@@ -245,6 +246,7 @@ export function PlaylistList({ onOpen }: { onOpen: (id: number) => void }) {
   const deleteMutation = useDeletePlaylist();
   const renameMutation = useRenamePlaylist();
   const { setQueue, setIsPlaying } = usePlayerStore();
+  const { show: showToast } = useToastStore();
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -271,7 +273,7 @@ export function PlaylistList({ onOpen }: { onOpen: (id: number) => void }) {
       const tracks = await invoke<Track[]>("get_playlist_tracks", { playlistId: playlist.id });
       if (tracks.length > 0) { setQueue(tracks, 0); setIsPlaying(true); }
     } catch (e) {
-      console.error("Failed to play playlist:", e);
+      showToast("Couldn't load playlist — " + String(e).slice(0, 60));
     }
   }
 

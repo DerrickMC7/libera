@@ -14,11 +14,10 @@ import { GenreList } from "./GenreList";
 import { PlaylistList } from "./PlaylistList";
 import { PlaylistView } from "./PlaylistView";
 import { useNavigationStore, registerMusicViewSetter, syncMusicView } from "../../store/navigationStore";
+import { useSettingsStore } from "../../store/settingsStore";
 import { Tooltip } from "../atoms/Tooltip";
 
 const IS_DEMO = !("__TAURI_INTERNALS__" in window);
-const MAX_PAGES_IN_MEMORY = 6;
-const MAX_CONCURRENT_LOADS = 2;
 
 type View = "tracks" | "albums" | "artists" | "genres" | "playlists";
 type TrackSortBy = "title" | "artist" | "duration_asc" | "duration_desc";
@@ -53,6 +52,8 @@ function SkeletonRow({ opacity }: { opacity: number }) {
 }
 
 export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
+  const maxPagesInMemory = useSettingsStore((s) => s.maxPagesInMemory);
+  const maxConcurrentLoads = useSettingsStore((s) => s.maxConcurrentLoads);
   const [view, setView] = useState<View>("tracks");
   const [resetKeys, setResetKeys] = useState({ albums: 0, artists: 0, genres: 0 });
   const [activePlaylistId, setActivePlaylistId] = useState<number | null>(null);
@@ -138,10 +139,10 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const { data: totalCount = 0 } = useTracksCount(debouncedSearch);
 
   const evictOldPages = useCallback((keepPages: number[]) => {
-    if (pagesRef.current.size <= MAX_PAGES_IN_MEMORY) return;
+    if (pagesRef.current.size <= maxPagesInMemory) return;
     const toEvict = pageOrderRef.current
       .filter((p) => !keepPages.includes(p))
-      .slice(0, pagesRef.current.size - MAX_PAGES_IN_MEMORY);
+      .slice(0, pagesRef.current.size - maxPagesInMemory);
     toEvict.forEach((p) => {
       pagesRef.current.delete(p);
       pageOrderRef.current = pageOrderRef.current.filter((x) => x !== p);
@@ -152,7 +153,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     async (pageIndex: number, visiblePages: number[]) => {
       if (pagesRef.current.has(pageIndex)) return;
       if (loadingRef.current.has(pageIndex)) return;
-      if (activeLoadsRef.current >= MAX_CONCURRENT_LOADS) return;
+      if (activeLoadsRef.current >= maxConcurrentLoads) return;
       loadingRef.current.add(pageIndex);
       activeLoadsRef.current++;
       const offset = pageIndex * PAGE_SIZE;

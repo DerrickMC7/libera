@@ -12,6 +12,7 @@ export function RepeatButton({ mode, onClick }: RepeatButtonProps) {
     <motion.button
       whileTap={{ scale: 0.92 }}
       onClick={onClick}
+      aria-label={mode === "off" ? "Repeat: off" : mode === "all" ? "Repeat: all" : "Repeat: one"}
       className={`relative transition-colors cursor-pointer ${
         mode !== "off" ? "text-[var(--accent)]" : "text-[#7a7060] hover:text-[#c8bfa8]"
       }`}

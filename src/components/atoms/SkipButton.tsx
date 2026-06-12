@@ -10,6 +10,7 @@ export function SkipButton({ direction, onClick }: SkipButtonProps) {
     <motion.button
       whileTap={{ scale: 0.92 }}
       onClick={onClick}
+      aria-label={direction === "previous" ? "Previous track" : "Next track"}
       className="text-[#7a7060] hover:text-[#c8bfa8] transition-colors cursor-pointer"
     >
       {direction === "previous" ? (

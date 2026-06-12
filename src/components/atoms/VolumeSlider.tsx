@@ -79,6 +79,7 @@ export function VolumeSlider({ volume, isMuted, onVolumeChange, onToggleMute }: 
       <button
         onClick={onToggleMute}
         className="shrink-0 text-[#7a7060] hover:text-[#c8bfa8] transition-colors"
+        aria-label={isMuted ? "Unmute" : "Mute"}
         title={isMuted ? "Unmute" : "Mute"}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -98,6 +99,7 @@ export function VolumeSlider({ volume, isMuted, onVolumeChange, onToggleMute }: 
           step="0.01"
           value={volume}
           onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+          aria-label="Volume"
           className="w-full volume-range"
           style={{ "--volume-pct": `${volume * 100}%` } as React.CSSProperties}
         />

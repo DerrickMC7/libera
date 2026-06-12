@@ -17,5 +17,7 @@ export interface Track {
   channels: number | null;
   file_size: number;
   mbid: string | null;
+  replay_gain_track: number | null;
+  replay_gain_album: number | null;
   artwork_path?: string | null;
 }

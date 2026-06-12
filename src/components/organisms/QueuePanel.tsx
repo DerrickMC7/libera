@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { usePlayerStore } from "../../store/playerStore";
 import { useArtwork } from "../../hooks/useArtwork";
@@ -217,6 +217,15 @@ export function QueuePanel({ open, onClose, isOnTop, onBringToFront }: QueuePane
     reorderQueue(srcAbsIdx, toAbsIdx);
   }
 
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Move focus inside on open so keyboard users can immediately Tab through queue tracks
+  const handleOpen = useCallback(() => {
+    const first = panelRef.current?.querySelector<HTMLElement>(
+      'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    first?.focus();
+  }, []);
+
   function handleDragEnd() {
     if (!dropFiredRef.current) {
       // Drag was cancelled — reset visual state back to store order
@@ -237,6 +246,10 @@ export function QueuePanel({ open, onClose, isOnTop, onBringToFront }: QueuePane
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "100%", opacity: 0 }}
             transition={{ type: "spring", stiffness: 400, damping: 40 }}
+            ref={panelRef}
+            role="complementary"
+            aria-label="Queue"
+            onAnimationComplete={handleOpen}
             onMouseDown={onBringToFront}
             className={`fixed right-0 top-0 bottom-16 sm:bottom-20 w-full sm:w-80 bg-[#161410] border-l border-white/5 flex flex-col shadow-2xl ${isOnTop ? "z-[52]" : "z-[51]"}`}
           >
@@ -255,7 +268,8 @@ export function QueuePanel({ open, onClose, isOnTop, onBringToFront }: QueuePane
                 {queueIndex > 0 && (
                   <button
                     onClick={() => setShowHistory((v) => !v)}
-                    title={showHistory ? "Hide played" : "Show played"}
+                    aria-label={showHistory ? "Hide played tracks" : "Show played tracks"}
+                    aria-pressed={showHistory}
                     className={`p-1.5 rounded-md transition-colors text-xs font-mono ${
                       showHistory
                         ? "text-[var(--accent)] bg-[var(--accent-a10)]"
@@ -269,6 +283,7 @@ export function QueuePanel({ open, onClose, isOnTop, onBringToFront }: QueuePane
                 )}
                 <button
                   onClick={onClose}
+                  aria-label="Close queue"
                   className="text-[#7a7060] hover:text-[#c8bfa8] transition-colors p-1"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">

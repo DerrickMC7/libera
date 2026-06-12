@@ -1,6 +1,28 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
 import { Track } from "../types/track";
+
+// zustand/persist writes synchronously to localStorage on EVERY store update.
+// Volume changes arrive at input-event rate while the slider is dragged, and
+// each synchronous write stalls the main thread — which the audio pipeline
+// feels as crackle. Coalesce writes into one trailing save instead.
+const debouncedStorage: StateStorage = (() => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: { name: string; value: string } | null = null;
+  const flush = () => {
+    if (pending) { localStorage.setItem(pending.name, pending.value); pending = null; }
+  };
+  window.addEventListener("beforeunload", flush);
+  return {
+    getItem: (name) => localStorage.getItem(name),
+    removeItem: (name) => localStorage.removeItem(name),
+    setItem: (name, value) => {
+      pending = { name, value };
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; flush(); }, 300);
+    },
+  };
+})();
 
 type RepeatMode = "off" | "all" | "one";
 
@@ -31,6 +53,7 @@ interface PlayerState {
   addToQueue: (track: Track) => void;
   removeFromQueue: (absIdx: number) => void;
   reorderQueue: (fromAbsIdx: number, toAbsIdx: number) => void;
+  closePlayer: () => void;
 }
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -123,6 +146,7 @@ export const usePlayerStore = create<PlayerState>()(
   setIsPlaying: (playing) => set({ isPlaying: playing }),
   setVolume: (volume) => set({ volume }),
   toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
+  closePlayer: () => set({ currentTrack: null, isPlaying: false, queue: [], shuffledQueue: [], queueIndex: 0, manualQueuePaths: [] }),
 
   setQueue: (tracks, startIndex) => {
     const { shuffle } = get();
@@ -326,6 +350,7 @@ export const usePlayerStore = create<PlayerState>()(
 }),
 {
   name: "libera-player",
+  storage: createJSONStorage(() => debouncedStorage),
   partialize: (s) => ({ volume: s.volume, isMuted: s.isMuted, shuffle: s.shuffle, repeat: s.repeat }),
 }
 ));

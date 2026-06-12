@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Track } from "../types/track";
 import { useCacheStore } from "../store/cacheStore";
+import { useToastStore } from "../store/toastStore";
 import { listen } from "@tauri-apps/api/event";
 
 export const PAGE_SIZE = 100;
@@ -32,6 +33,7 @@ export function useTracksPage(search: string, offset: number, enabled = true, so
 export function useScanFolder() {
   const queryClient = useQueryClient();
   const { startProcessing, setProgress, finishProcessing } = useCacheStore();
+  const { show: showToast } = useToastStore();
 
   return useMutation({
     mutationFn: async (folderPath: string) => {
@@ -71,7 +73,10 @@ export function useScanFolder() {
         });
 
         // Start pre-caching in background (don't await — runs async)
-        invoke("precache_artwork", { trackPaths: uncachedPaths }).catch(console.error);
+        invoke("precache_artwork", { trackPaths: uncachedPaths }).catch((e) => {
+          finishProcessing();
+          showToast("Artwork caching failed — " + String(e).slice(0, 60));
+        });
       }
 
       return { tracks, saved };
@@ -79,6 +84,9 @@ export function useScanFolder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tracks-page"] });
       queryClient.invalidateQueries({ queryKey: ["tracks-count"] });
+    },
+    onError: (e: unknown) => {
+      showToast("Scan failed — " + String(e).slice(0, 80));
     },
   });
 }

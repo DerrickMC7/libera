@@ -10,6 +10,8 @@ export function ShuffleButton({ active, onClick }: ShuffleButtonProps) {
     <motion.button
       whileTap={{ scale: 0.92 }}
       onClick={onClick}
+      aria-label={active ? "Shuffle: on" : "Shuffle: off"}
+      aria-pressed={active}
       className={`transition-colors cursor-pointer ${
         active ? "text-[var(--accent)]" : "text-[#7a7060] hover:text-[#c8bfa8]"
       }`}

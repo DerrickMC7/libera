@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Track } from "../../types/track";
 import { useArtwork } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
@@ -6,17 +6,7 @@ import { useToastStore } from "../../store/toastStore";
 import { useContextMenuStore } from "../../store/contextMenuStore";
 import { useNavigationStore } from "../../store/navigationStore";
 import { ArtistLinks } from "../atoms/ArtistLinks";
-
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() => window.innerWidth < 640);
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 639px)");
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-  return mobile;
-}
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 function fmt(secs: number) {
   const m = Math.floor(secs / 60);
@@ -114,6 +104,10 @@ export function TrackRow({
 
   return (
     <div
+      role="option"
+      tabIndex={0}
+      aria-selected={isActive}
+      aria-label={`${track.title} by ${track.artist}`}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -121,6 +115,7 @@ export function TrackRow({
       onDragEnd={onDragEnd}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick?.(); } }}
       onContextMenu={(e) => { e.preventDefault(); showContextMenu(track, e.clientX, e.clientY, playlistId); }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -190,7 +185,7 @@ export function TrackRow({
           <>
             <button
               onClick={(e) => { e.stopPropagation(); addToQueue(track); showToast(`Added to queue — ${track.title}`); }}
-              title="Add to queue"
+              aria-label="Add to queue"
               className="p-1.5 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -199,7 +194,7 @@ export function TrackRow({
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); playNext(track); showToast(`Playing next — ${track.title}`); }}
-              title="Play next"
+              aria-label="Play next"
               className="p-1.5 rounded-md text-[#7a7060] hover:text-[var(--accent)] hover:bg-[var(--accent-a10)] transition-colors"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">

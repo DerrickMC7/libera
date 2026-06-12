@@ -140,6 +140,8 @@ const PhotoListRow = memo(function PhotoListRow({
           <button
             key={star}
             onClick={() => { const r = star === iRating ? 0 : star; setRatingOverride(photo.path, r); setRating({ path: photo.path, rating: r }); }}
+            aria-label={`Rate ${star} star${star !== 1 ? "s" : ""}`}
+            aria-pressed={star <= iRating}
             className="transition-colors text-[#3a3628] hover:text-[var(--accent)]"
           >
             <svg
@@ -158,6 +160,8 @@ const PhotoListRow = memo(function PhotoListRow({
 
       {/* Favorite button */}
       <button
+        aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+        aria-pressed={isFavorite}
         className={`shrink-0 cursor-pointer transition-opacity ${isFavorite ? "opacity-100" : "opacity-0 group-hover:opacity-60"}`}
         onClick={(e) => { e.stopPropagation(); setFavoriteOverride(photo.path, !isFavorite); toggleFavorite({ path: photo.path }); }}
       >
@@ -275,7 +279,7 @@ function PhotoListView({
             exit={{ opacity: 0, scale: 0.8 }}
             onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
             className="absolute bottom-6 right-6 p-2.5 rounded-full bg-[#1a1814] border border-white/10 text-[#5a5244] hover:text-[var(--accent)] hover:border-[var(--accent-a20)] shadow-lg transition-colors"
-            title="Scroll to top"
+            aria-label="Scroll to top"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M18 15l-6-6-6 6" />
@@ -472,7 +476,7 @@ function PhotoMasonryView({
             exit={{ opacity: 0, scale: 0.8 }}
             onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
             className="absolute bottom-6 right-6 p-2.5 rounded-full bg-[#1a1814] border border-white/10 text-[#5a5244] hover:text-[var(--accent)] hover:border-[var(--accent-a20)] shadow-lg transition-colors"
-            title="Scroll to top"
+            aria-label="Scroll to top"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M18 15l-6-6-6 6" />
@@ -734,7 +738,7 @@ export function PhotoGrid({ photos, total, onLoadMore, loading, emptyMessage, ca
             exit={{ opacity: 0, scale: 0.8 }}
             onClick={() => scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
             className="absolute bottom-6 right-6 p-2.5 rounded-full bg-[#1a1814] border border-white/10 text-[#5a5244] hover:text-[var(--accent)] hover:border-[var(--accent-a20)] shadow-lg transition-colors"
-            title="Scroll to top"
+            aria-label="Scroll to top"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M18 15l-6-6-6 6" />
