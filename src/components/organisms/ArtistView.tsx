@@ -8,6 +8,7 @@ import { useArtistImage } from "../../hooks/useArtistImage";
 import { useArtistBanner } from "../../hooks/useArtistBanner";
 import { usePlayerStore } from "../../store/playerStore";
 import { useNavigationStore } from "../../store/navigationStore";
+import { useToastStore } from "../../store/toastStore";
 import { TrackRow } from "../molecules/TrackRow";
 import { ArtistBannerModal } from "./ArtistBannerModal";
 import { Artist } from "../../types/artist";
@@ -40,6 +41,7 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
   const navigateToAlbum = useNavigationStore((s) => s.navigateToAlbum);
   const queryClient = useQueryClient();
+  const { show: showToast } = useToastStore();
 
   const { data: artistBannerUrl } = useArtistBanner(artist.name);
   const { data: artistImageUrl } = useArtistImage(artist.name);
@@ -72,7 +74,7 @@ export function ArtistView({ artist, onBack }: ArtistViewProps) {
       queryClient.invalidateQueries({ queryKey: ["artist-banner", artist.name] });
       queryClient.invalidateQueries({ queryKey: ["artist-banner-custom", artist.name] });
     } catch (e) {
-      console.error("Failed to reset banner", e);
+      showToast("Failed to reset banner — " + String(e).slice(0, 60));
     }
   }
 

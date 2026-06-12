@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { usePlaylists, usePlaylistTracks, useReorderPlaylist, useRenamePlaylist, useDeletePlaylist } from "../../hooks/usePlaylist";
 import { PlaylistCoverModal } from "./PlaylistCoverModal";
 import { usePlayerStore } from "../../store/playerStore";
+import { useToastStore } from "../../store/toastStore";
 import { useArtwork } from "../../hooks/useArtwork";
 import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import { Track } from "../../types/track";
@@ -45,6 +48,7 @@ export function PlaylistView({
   const renameMutation = useRenamePlaylist();
   const deleteMutation = useDeletePlaylist();
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
+  const { show: showToast } = useToastStore();
 
   const playlist = playlists.find((p) => p.id === playlistId);
 
@@ -121,6 +125,26 @@ export function PlaylistView({
       renameMutation.mutate({ playlistId, name: trimmed });
     }
     setEditingName(false);
+  }
+
+  async function handleExport(format: "m3u" | "pls") {
+    try {
+      const content = await invoke<string>(
+        format === "m3u" ? "export_playlist_m3u" : "export_playlist_pls",
+        { playlistId }
+      );
+      const name = playlist?.name ?? "playlist";
+      const savePath = await save({
+        defaultPath: `${name}.${format}`,
+        filters: [{ name: format.toUpperCase(), extensions: [format] }],
+      });
+      if (!savePath) return;
+      await invoke("write_text_file", { path: savePath, content });
+      showToast(`Exported ${name}.${format}`);
+      setMenuOpen(false);
+    } catch (e) {
+      showToast("Export failed — " + String(e).slice(0, 60));
+    }
   }
 
   return (
@@ -256,6 +280,24 @@ export function PlaylistView({
                               <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
                             </svg>
                             Change Cover…
+                          </button>
+                          <button
+                            onClick={() => handleExport("m3u")}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#c8bfa8] hover:bg-[#2a2820] hover:text-[#f0ead8] transition-colors text-left"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" className="opacity-70">
+                              <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                            </svg>
+                            Export as M3U
+                          </button>
+                          <button
+                            onClick={() => handleExport("pls")}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#c8bfa8] hover:bg-[#2a2820] hover:text-[#f0ead8] transition-colors text-left"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" className="opacity-70">
+                              <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                            </svg>
+                            Export as PLS
                           </button>
                           <div className="h-px bg-white/5 my-1 mx-1" />
                           <button

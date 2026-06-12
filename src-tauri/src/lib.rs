@@ -9,7 +9,7 @@ use rusqlite::Result as SqlResult;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -225,6 +225,9 @@ fn initialize_database(conn: &rusqlite::Connection) -> SqlResult<()> {
     let _ = conn.execute("ALTER TABLE tracks ADD COLUMN mbid TEXT", []);
     // Non-destructive migration: per-track custom artwork override hash
     let _ = conn.execute("ALTER TABLE tracks ADD COLUMN custom_artwork_hash TEXT", []);
+    // Non-destructive migration: ReplayGain track/album gain values (dB as REAL)
+    let _ = conn.execute("ALTER TABLE tracks ADD COLUMN replay_gain_track REAL", []);
+    let _ = conn.execute("ALTER TABLE tracks ADD COLUMN replay_gain_album REAL", []);
     // Clean existing album_artist values that contain bare "/" collaboration credits
     // (e.g. "Fred again../Baby Keem" → "Fred again..").
     // INSTR is 1-indexed in SQLite, so > 3 means at least 3 chars before the slash,
@@ -316,6 +319,31 @@ fn initialize_database(conn: &rusqlite::Connection) -> SqlResult<()> {
         CREATE INDEX IF NOT EXISTS idx_pci_collection ON photo_collection_items(collection_id);
         CREATE INDEX IF NOT EXISTS idx_pci_path ON photo_collection_items(photo_path);"
     ).ok();
+    // Video library
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS videos (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            path          TEXT NOT NULL UNIQUE,
+            title         TEXT NOT NULL,
+            format        TEXT NOT NULL,
+            file_size     INTEGER NOT NULL DEFAULT 0,
+            date_added    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+            duration_secs INTEGER NOT NULL DEFAULT 0,
+            width         INTEGER NOT NULL DEFAULT 0,
+            height        INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_videos_title  ON videos(title);
+        CREATE INDEX IF NOT EXISTS idx_videos_format ON videos(format);"
+    ).ok();
+    // Non-destructive: video watch-state + series columns
+    let _ = conn.execute("ALTER TABLE videos ADD COLUMN folder TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE videos ADD COLUMN watched_secs INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE videos ADD COLUMN last_watched INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE videos ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE videos ADD COLUMN series TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE videos ADD COLUMN season INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE videos ADD COLUMN episode INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_series ON videos(series)", []);
     Ok(())
 }
 
@@ -370,9 +398,10 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
             "INSERT OR IGNORE INTO tracks
                 (path, title, artist, album, album_artist, genre, year,
                 track_number, track_total, disc_number, disc_total,
-                duration_secs, bitrate, sample_rate, channels, file_size, mbid)
+                duration_secs, bitrate, sample_rate, channels, file_size, mbid,
+                replay_gain_track, replay_gain_album)
             VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             rusqlite::params![
                 track.path,
                 track.title,
@@ -391,6 +420,8 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
                 track.channels,
                 track.file_size,
                 track.mbid,
+                track.replay_gain_track,
+                track.replay_gain_album,
             ],
         );
         if result.is_ok() {
@@ -412,7 +443,7 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
 fn get_tracks(state: State<DbState>) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
     let mut stmt = conn
-        .prepare("SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid FROM tracks")
+        .prepare("SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album FROM tracks")
         .map_err(|e| format!("Query error: {}", e))?;
     let tracks = stmt
         .query_map([], |row| {
@@ -434,6 +465,8 @@ fn get_tracks(state: State<DbState>) -> Result<Vec<Track>, String> {
                 channels: row.get(14)?,
                 file_size: row.get(15)?,
                 mbid: row.get(16)?,
+                replay_gain_track: row.get(17)?,
+                replay_gain_album: row.get(18)?,
             })
         })
         .map_err(|e| format!("Query error: {}", e))?
@@ -478,7 +511,7 @@ fn get_tracks_page(
     sort_by: Option<String>,
 ) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-    let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid FROM tracks";
+    let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album FROM tracks";
     let order_clause = match sort_by.as_deref() {
         Some("title") => "ORDER BY LOWER(title)",
         Some("album") => "ORDER BY album_artist, album",
@@ -506,6 +539,8 @@ fn get_tracks_page(
             channels: row.get(14)?,
             file_size: row.get(15)?,
             mbid: row.get(16)?,
+            replay_gain_track: row.get(17)?,
+            replay_gain_album: row.get(18)?,
         })
     };
     let tracks: Vec<Track> = if query.is_empty() {
@@ -611,6 +646,8 @@ pub struct Track {
     pub channels: Option<u8>,
     pub file_size: u64,
     pub mbid: Option<String>,
+    pub replay_gain_track: Option<f32>,
+    pub replay_gain_album: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -620,6 +657,34 @@ pub struct Book {
     pub file_name: String,
     pub format: String,
     pub file_size: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Video {
+    pub id: i64,
+    pub path: String,
+    pub title: String,
+    pub format: String,
+    pub file_size: i64,
+    pub date_added: i64,
+    pub duration_secs: i64,
+    pub width: i64,
+    pub height: i64,
+    pub folder: String,
+    pub watched_secs: i64,
+    pub last_watched: i64,
+    pub is_favorite: bool,
+    /// Series name parsed from the filename/folders; empty for standalone films
+    pub series: String,
+    pub season: i64,
+    pub episode: i64,
+}
+
+#[derive(Serialize, Debug)]
+pub struct SubtitleTrack {
+    pub label: String,
+    /// Path to a .vtt file (sidecar .srt files are converted into the cache dir)
+    pub vtt_path: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -675,7 +740,29 @@ fn get_library_stats(app: tauri::AppHandle, state: State<DbState>) -> Result<Lib
         .query_row("SELECT COALESCE(SUM(duration_secs), 0) FROM tracks", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
 
-    let empty_cat = StorageCategory { total_size_bytes: 0, total_count: 0, entries: vec![] };
+    // Videos: group by format
+    let mut video_stmt = conn
+        .prepare("SELECT format, file_size FROM videos")
+        .map_err(|e| e.to_string())?;
+    let video_rows: Vec<(String, i64)> = video_stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    let mut video_map: std::collections::HashMap<String, (i64, i64)> =
+        std::collections::HashMap::new();
+    for (fmt, size) in &video_rows {
+        let e = video_map.entry(fmt.to_lowercase()).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += size;
+    }
+    let mut video_entries: Vec<StorageEntry> = video_map
+        .into_iter()
+        .map(|(label, (count, size_bytes))| StorageEntry { label, count, size_bytes })
+        .collect();
+    video_entries.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    let video_total: i64 = video_entries.iter().map(|e| e.size_bytes).sum();
+    let video_count: i64 = video_entries.iter().map(|e| e.count).sum();
 
     // Music: group by extension with count + size
     let music_rows: Vec<(String, i64)> = conn
@@ -748,7 +835,7 @@ fn get_library_stats(app: tauri::AppHandle, state: State<DbState>) -> Result<Lib
     Ok(LibraryStats {
         total_duration_secs,
         music:  StorageCategory { total_size_bytes: music_total,  total_count: music_count,  entries: music_entries },
-        videos: empty_cat,
+        videos: StorageCategory { total_size_bytes: video_total, total_count: video_count, entries: video_entries },
         books:  StorageCategory { total_size_bytes: books_total,  total_count: books_count,  entries: books_entries },
         images: StorageCategory { total_size_bytes: images_total, total_count: images_count, entries: images_entries },
     })
@@ -856,6 +943,20 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
     let sample_rate = properties.sample_rate();
     let channels = properties.channels();
     let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+    // Parse ReplayGain tags (value looks like "-4.21 dB" or "+2.00 dB")
+    fn parse_rg(s: &str) -> Option<f32> {
+        s.trim().trim_end_matches("dB").trim().parse::<f32>().ok()
+    }
+    let replay_gain_track = tag
+        .and_then(|t| t.get_string(&lofty::tag::ItemKey::ReplayGainTrackGain).map(|s| s.to_string()))
+        .as_deref()
+        .and_then(parse_rg);
+    let replay_gain_album = tag
+        .and_then(|t| t.get_string(&lofty::tag::ItemKey::ReplayGainAlbumGain).map(|s| s.to_string()))
+        .as_deref()
+        .and_then(parse_rg);
+
     Some(Track {
         path: path.to_string_lossy().to_string(),
         title,
@@ -874,6 +975,8 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
         channels,
         file_size,
         mbid,
+        replay_gain_track,
+        replay_gain_album,
     })
 }
 
@@ -1095,6 +1198,98 @@ fn get_artwork_original(
         enc.encode_image(&img).ok()?;
     }
     Some(cache_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn fetch_missing_artwork(
+    app: tauri::AppHandle,
+    album_name: String,
+    album_artist: String,
+) -> Result<String, String> {
+    use image::imageops::FilterType;
+
+    let hash = album_hash(&album_name, &album_artist);
+    let cache_base = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artwork");
+    let thumb_path = cache_base.join("thumb").join(format!("{hash}.jpg"));
+    let full_path = cache_base.join("full").join(format!("{hash}.jpg"));
+
+    if thumb_path.exists() && full_path.exists() {
+        return Ok(thumb_path.to_string_lossy().to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("Libera/1.0 (music player)")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let query = format!(
+        "release:\"{}\" AND artist:\"{}\"",
+        album_name.replace('"', ""),
+        album_artist.replace('"', ""),
+    );
+    let mb_url = format!(
+        "https://musicbrainz.org/ws/2/release/?query={}&fmt=json&limit=5",
+        urlencoding::encode(&query),
+    );
+
+    let mb_json: serde_json::Value = client
+        .get(&mb_url)
+        .send()
+        .await
+        .map_err(|e| format!("MusicBrainz request: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("MusicBrainz parse: {e}"))?;
+
+    let mbid = mb_json["releases"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|r| r["id"].as_str())
+        .ok_or_else(|| "No release found on MusicBrainz".to_string())?
+        .to_string();
+
+    let caa_url = format!("https://coverartarchive.org/release/{mbid}/front");
+    let img_resp = client
+        .get(&caa_url)
+        .send()
+        .await
+        .map_err(|e| format!("CoverArtArchive request: {e}"))?;
+
+    if !img_resp.status().is_success() {
+        return Err(format!("CoverArtArchive returned {}", img_resp.status()));
+    }
+
+    let img_bytes = img_resp.bytes().await.map_err(|e| e.to_string())?;
+    let img =
+        image::load_from_memory(&img_bytes).map_err(|e| format!("Image decode: {e}"))?;
+
+    fs::create_dir_all(cache_base.join("thumb")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(cache_base.join("full")).map_err(|e| e.to_string())?;
+
+    {
+        let thumb = img.resize(128, 128, FilterType::Lanczos3);
+        let output = fs::File::create(&thumb_path).map_err(|e| e.to_string())?;
+        let mut buf = std::io::BufWriter::new(output);
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 75)
+            .encode_image(&thumb)
+            .map_err(|e| e.to_string())?;
+    }
+
+    {
+        let full = img.resize(300, 300, FilterType::Lanczos3);
+        let output = fs::File::create(&full_path).map_err(|e| e.to_string())?;
+        let mut buf = std::io::BufWriter::new(output);
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 85)
+            .encode_image(&full)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(thumb_path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -2072,7 +2267,7 @@ fn get_album_tracks(
         .prepare(
             "SELECT path, title, artist, album, album_artist, genre, year,
          track_number, track_total, disc_number, disc_total,
-         duration_secs, bitrate, sample_rate, channels, file_size, mbid
+         duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album
          FROM tracks WHERE album = ?1 AND album_artist = ?2
          ORDER BY disc_number, track_number",
         )
@@ -2097,6 +2292,8 @@ fn get_album_tracks(
                 channels: row.get(14)?,
                 file_size: row.get(15)?,
                 mbid: row.get(16)?,
+                replay_gain_track: row.get(17)?,
+                replay_gain_album: row.get(18)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -2322,7 +2519,8 @@ fn get_artist_details(state: State<DbState>, artist: String) -> Result<Vec<Artis
             .prepare(
                 "SELECT t.path, t.title, t.artist, t.album, t.album_artist, t.genre, t.year,
                         t.track_number, t.track_total, t.disc_number, t.disc_total,
-                        t.duration_secs, t.bitrate, t.sample_rate, t.channels, t.file_size, t.mbid
+                        t.duration_secs, t.bitrate, t.sample_rate, t.channels, t.file_size, t.mbid,
+                        t.replay_gain_track, t.replay_gain_album
                  FROM track_artists ta
                  JOIN tracks t ON ta.track_path = t.path
                  WHERE ta.artist_name = ?1 AND t.album = ?2
@@ -2350,6 +2548,8 @@ fn get_artist_details(state: State<DbState>, artist: String) -> Result<Vec<Artis
                     channels: row.get(14)?,
                     file_size: row.get(15)?,
                     mbid: row.get(16)?,
+                    replay_gain_track: row.get(17)?,
+                    replay_gain_album: row.get(18)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -2374,38 +2574,39 @@ fn search_genres(state: State<DbState>, query: String, sort_by: Option<String>) 
         Some("count") => "ORDER BY track_count DESC",
         _ => "ORDER BY name COLLATE NOCASE",
     };
-    let mut stmt = if query.is_empty() {
-        conn.prepare(&format!(
+    let genres: Vec<Genre> = if query.is_empty() {
+        let sql = format!(
             "SELECT genre as name, COUNT(*) as track_count, MIN(path) as cover_path
              FROM tracks
              GROUP BY genre
              {}",
             order_clause
-        ))
-        .map_err(|e| e.to_string())?
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| Ok(Genre {
+            name: row.get(0)?,
+            track_count: row.get::<_, i64>(1)? as usize,
+            cover_path: row.get(2)?,
+        })).map_err(|e| e.to_string())?;
+        rows.filter_map(|g| g.ok()).collect()
     } else {
         let pattern = format!("%{}%", query.to_lowercase());
-        conn.prepare(&format!(
+        let sql = format!(
             "SELECT genre as name, COUNT(*) as track_count, MIN(path) as cover_path
              FROM tracks
-             WHERE LOWER(genre) LIKE '{pattern}'
+             WHERE LOWER(genre) LIKE ?1
              GROUP BY genre
              {}",
             order_clause
-        ))
-        .map_err(|e| e.to_string())?
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([&pattern], |row| Ok(Genre {
+            name: row.get(0)?,
+            track_count: row.get::<_, i64>(1)? as usize,
+            cover_path: row.get(2)?,
+        })).map_err(|e| e.to_string())?;
+        rows.filter_map(|g| g.ok()).collect()
     };
-    let genres = stmt
-        .query_map([], |row| {
-            Ok(Genre {
-                name: row.get(0)?,
-                track_count: row.get::<_, i64>(1)? as usize,
-                cover_path: row.get(2)?,
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|g| g.ok())
-        .collect();
     Ok(genres)
 }
 
@@ -2421,7 +2622,7 @@ fn get_genre_tracks(
         .prepare(
             "SELECT path, title, artist, album, album_artist, genre, year,
          track_number, track_total, disc_number, disc_total,
-         duration_secs, bitrate, sample_rate, channels, file_size, mbid
+         duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album
          FROM tracks WHERE genre = ?1
          ORDER BY artist, album, track_number
          LIMIT ?2 OFFSET ?3",
@@ -2447,6 +2648,8 @@ fn get_genre_tracks(
                 channels: row.get(14)?,
                 file_size: row.get(15)?,
                 mbid: row.get(16)?,
+                replay_gain_track: row.get(17)?,
+                replay_gain_album: row.get(18)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -2533,7 +2736,8 @@ fn get_playlist_tracks(state: State<DbState>, playlist_id: i64) -> Result<Vec<Tr
     let mut stmt = conn.prepare(
         "SELECT t.path, t.title, t.artist, t.album, t.album_artist, t.genre, t.year,
                 t.track_number, t.track_total, t.disc_number, t.disc_total,
-                t.duration_secs, t.bitrate, t.sample_rate, t.channels, t.file_size, t.mbid
+                t.duration_secs, t.bitrate, t.sample_rate, t.channels, t.file_size, t.mbid,
+                t.replay_gain_track, t.replay_gain_album
          FROM playlist_tracks pt
          JOIN tracks t ON t.path = pt.track_path
          WHERE pt.playlist_id = ?1
@@ -2547,6 +2751,7 @@ fn get_playlist_tracks(state: State<DbState>, playlist_id: i64) -> Result<Vec<Tr
             disc_number: row.get(9)?, disc_total: row.get(10)?, duration_secs: row.get(11)?,
             bitrate: row.get(12)?, sample_rate: row.get(13)?, channels: row.get(14)?,
             file_size: row.get(15)?, mbid: row.get(16)?,
+            replay_gain_track: row.get(17)?, replay_gain_album: row.get(18)?,
         })
     })
     .map_err(|e| e.to_string())?
@@ -4703,6 +4908,448 @@ fn get_photo_camera_stats(state: State<DbState>) -> Result<Vec<serde_json::Value
     Ok(rows)
 }
 
+#[tauri::command]
+fn export_playlist_m3u(state: State<DbState>, playlist_id: i64) -> Result<String, String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+
+    // Fetch playlist name
+    let name: String = conn.query_row(
+        "SELECT name FROM playlists WHERE id = ?1",
+        rusqlite::params![playlist_id],
+        |r| r.get(0),
+    ).map_err(|e| e.to_string())?;
+
+    // Fetch ordered tracks with duration
+    let mut stmt = conn.prepare(
+        "SELECT t.path, t.duration_secs, t.artist, t.title
+         FROM playlist_tracks pt
+         JOIN tracks t ON t.path = pt.track_path
+         WHERE pt.playlist_id = ?1
+         ORDER BY pt.position",
+    ).map_err(|e| e.to_string())?;
+
+    let rows = stmt.query_map(rusqlite::params![playlist_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    }).map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok());
+
+    let mut m3u = format!("#EXTM3U\n#PLAYLIST:{}\n", name);
+    for (path, duration, artist, title) in rows {
+        m3u.push_str(&format!("#EXTINF:{},{} - {}\n{}\n", duration, artist, title, path));
+    }
+    Ok(m3u)
+}
+
+#[tauri::command]
+fn export_playlist_pls(state: State<DbState>, playlist_id: i64) -> Result<String, String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(
+        "SELECT t.path, t.title, t.duration_secs
+         FROM playlist_tracks pt
+         JOIN tracks t ON t.path = pt.track_path
+         WHERE pt.playlist_id = ?1
+         ORDER BY pt.position",
+    ).map_err(|e| e.to_string())?;
+
+    let rows: Vec<(String, String, i64)> = stmt.query_map(rusqlite::params![playlist_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    }).map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    let total = rows.len();
+    let mut pls = "[playlist]\n".to_string();
+    for (i, (path, title, duration)) in rows.into_iter().enumerate() {
+        let n = i + 1;
+        pls.push_str(&format!("File{}={}\nTitle{}={}\nLength{}={}\n", n, path, n, title, n, duration));
+    }
+    pls.push_str(&format!("\nNumberOfEntries={}\nVersion=2\n", total));
+    Ok(pls)
+}
+
+// ── Video Library ─────────────────────────────────────────────────────────────
+
+const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", "wmv"];
+
+/// Turn "The.Show.Name_S01E02" separators into spaces and tidy up.
+fn clean_media_name(raw: &str) -> String {
+    let mut s: String = raw.chars().map(|c| if c == '.' || c == '_' { ' ' } else { c }).collect();
+    s = s.trim().trim_matches(|c| c == '-' || c == ' ').to_string();
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Detect "S01E02" / "s1e2" / "1x02" patterns in a filename.
+/// Returns (series_prefix_end, season, episode, pattern_end) when found.
+fn find_episode_pattern(stem: &str) -> Option<(usize, i64, i64, usize)> {
+    let lower = stem.to_lowercase();
+    let bytes = lower.as_bytes();
+    let digits_at = |mut i: usize| -> Option<(i64, usize)> {
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+        if i == start || i - start > 4 { return None; }
+        lower[start..i].parse::<i64>().ok().map(|n| (n, i))
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        // SxxEyy
+        if bytes[i] == b's' {
+            if let Some((season, after_s)) = digits_at(i + 1) {
+                if after_s < bytes.len() && bytes[after_s] == b'e' {
+                    if let Some((episode, after_e)) = digits_at(after_s + 1) {
+                        return Some((i, season, episode, after_e));
+                    }
+                }
+            }
+        }
+        // NxNN (e.g. "1x02") — require a digit start preceded by start/non-alphanumeric
+        if bytes[i].is_ascii_digit() && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) {
+            if let Some((season, after_n)) = digits_at(i) {
+                if season <= 99 && after_n < bytes.len() && bytes[after_n] == b'x' {
+                    if let Some((episode, after_e)) = digits_at(after_n + 1) {
+                        // require the episode part to be 2+ digits to avoid "1280x720"
+                        if after_e - (after_n + 1) >= 2 && episode <= 999 && season >= 1 {
+                            return Some((i, season, episode, after_e));
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract (series, season, episode, episode_title) from a video path.
+/// Falls back to folder names ("Show/Season 2/...") for the series name.
+fn parse_series_info(path: &Path) -> (String, i64, i64, Option<String>) {
+    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+        Some(s) => s,
+        None => return (String::new(), 0, 0, None),
+    };
+
+    let folder_series = || -> Option<String> {
+        // parent could be "Season 2" → use grandparent as series name
+        let parent = path.parent()?;
+        let parent_name = parent.file_name()?.to_str()?;
+        let pl = parent_name.to_lowercase();
+        if pl.starts_with("season") || pl.starts_with("temporada") || pl.starts_with("staffel") {
+            let gp = parent.parent()?.file_name()?.to_str()?;
+            Some(clean_media_name(gp))
+        } else {
+            Some(clean_media_name(parent_name))
+        }
+    };
+
+    if let Some((prefix_end, season, episode, pattern_end)) = find_episode_pattern(stem) {
+        let mut series = clean_media_name(&stem[..prefix_end]);
+        if series.is_empty() {
+            series = folder_series().unwrap_or_default();
+        }
+        let rest = clean_media_name(&stem[pattern_end..]);
+        let ep_title = if rest.is_empty() { None } else { Some(rest) };
+        return (series, season, episode, ep_title);
+    }
+    (String::new(), 0, 0, None)
+}
+
+fn scan_video_files(folder: &PathBuf) -> Vec<Video> {
+    WalkDir::new(folder)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let ext = path.extension()?.to_str()?.to_lowercase();
+            if !VIDEO_EXTENSIONS.contains(&ext.as_str()) { return None; }
+            let meta = entry.metadata().ok()?;
+            let file_size = meta.len() as i64;
+            let stem = path.file_stem()?.to_string_lossy().to_string();
+            let date_added = meta.modified().ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+
+            let (series, season, episode, ep_title) = parse_series_info(path);
+            // Episodes show their episode title (or "Episode N"); films show the cleaned stem
+            let title = if !series.is_empty() {
+                ep_title.unwrap_or_else(|| format!("Episode {episode}"))
+            } else {
+                clean_media_name(&stem)
+            };
+            let folder = path.parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            Some(Video {
+                id: 0,
+                path: path.to_string_lossy().to_string(),
+                title: if title.is_empty() { stem } else { title },
+                format: ext,
+                file_size,
+                date_added,
+                duration_secs: 0,
+                width: 0,
+                height: 0,
+                folder,
+                watched_secs: 0,
+                last_watched: 0,
+                is_favorite: false,
+                series,
+                season,
+                episode,
+            })
+        })
+        .collect()
+}
+
+const VIDEO_COLS: &str = "id, path, title, format, file_size, date_added, duration_secs, width, height,
+                          folder, watched_secs, last_watched, is_favorite, series, season, episode";
+
+fn row_to_video(row: &rusqlite::Row) -> rusqlite::Result<Video> {
+    Ok(Video {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        title: row.get(2)?,
+        format: row.get(3)?,
+        file_size: row.get(4)?,
+        date_added: row.get(5)?,
+        duration_secs: row.get(6)?,
+        width: row.get(7)?,
+        height: row.get(8)?,
+        folder: row.get(9)?,
+        watched_secs: row.get(10)?,
+        last_watched: row.get(11)?,
+        is_favorite: row.get::<_, i64>(12)? != 0,
+        series: row.get(13)?,
+        season: row.get(14)?,
+        episode: row.get(15)?,
+    })
+}
+
+#[tauri::command]
+fn scan_and_save_videos(state: State<DbState>, path: String) -> Result<usize, String> {
+    let folder = PathBuf::from(&path);
+    if !folder.exists() {
+        return Err(format!("Folder not found: {path}"));
+    }
+    let videos = scan_video_files(&folder);
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+    let mut saved = 0usize;
+    for v in &videos {
+        // Upsert: refresh title/series parsing and file size on rescan, but
+        // never touch watch state (watched_secs / last_watched / is_favorite).
+        let r = conn.execute(
+            "INSERT INTO videos (path, title, format, file_size, date_added, folder, series, season, episode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(path) DO UPDATE SET
+               title = excluded.title, format = excluded.format, file_size = excluded.file_size,
+               folder = excluded.folder, series = excluded.series,
+               season = excluded.season, episode = excluded.episode",
+            rusqlite::params![v.path, v.title, v.format, v.file_size, v.date_added, v.folder, v.series, v.season, v.episode],
+        ).map_err(|e| e.to_string())?;
+        saved += r;
+    }
+    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+    Ok(saved)
+}
+
+#[tauri::command]
+fn get_videos_count(state: State<DbState>) -> Result<i64, String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM videos", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+#[tauri::command]
+fn get_all_videos(state: State<DbState>) -> Result<Vec<Video>, String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&format!("SELECT {VIDEO_COLS} FROM videos ORDER BY title COLLATE NOCASE"))
+        .map_err(|e| e.to_string())?;
+    let videos: Vec<Video> = stmt
+        .query_map([], row_to_video)
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(videos)
+}
+
+#[tauri::command]
+fn update_video_metadata(state: State<DbState>, path: String, duration_secs: i64, width: i64, height: i64) -> Result<(), String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE videos SET duration_secs = ?2, width = ?3, height = ?4 WHERE path = ?1",
+        rusqlite::params![path, duration_secs, width, height],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_video_progress(state: State<DbState>, path: String, watched_secs: i64, duration_secs: i64) -> Result<(), String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE videos SET watched_secs = ?2, last_watched = strftime('%s','now'),
+                           duration_secs = CASE WHEN ?3 > 0 THEN ?3 ELSE duration_secs END
+         WHERE path = ?1",
+        rusqlite::params![path, watched_secs, duration_secs],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_video_watched(state: State<DbState>, path: String, watched: bool) -> Result<(), String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    if watched {
+        // duration may be 0 if never played; mark with a sentinel so % math still works
+        conn.execute(
+            "UPDATE videos SET watched_secs = CASE WHEN duration_secs > 0 THEN duration_secs ELSE 1 END,
+                               last_watched = strftime('%s','now')
+             WHERE path = ?1",
+            rusqlite::params![path],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        conn.execute(
+            "UPDATE videos SET watched_secs = 0 WHERE path = ?1",
+            rusqlite::params![path],
+        ).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_video_favorite(state: State<DbState>, path: String) -> Result<bool, String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE videos SET is_favorite = 1 - is_favorite WHERE path = ?1",
+        rusqlite::params![path],
+    ).map_err(|e| e.to_string())?;
+    let fav: i64 = conn
+        .query_row("SELECT is_favorite FROM videos WHERE path = ?1", rusqlite::params![path], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    Ok(fav != 0)
+}
+
+#[tauri::command]
+fn delete_video_from_library(state: State<DbState>, path: String) -> Result<(), String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM videos WHERE path = ?1", rusqlite::params![path])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_videos_library(state: State<DbState>) -> Result<(), String> {
+    let conn = state.0.get().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM videos", []).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ── Video thumbnails ─────────────────────────────────────────────────────────
+// The frontend captures a frame once (canvas → JPEG) and persists it here so
+// the library grid never has to spin up video decoders for cards again.
+
+fn video_thumb_path(app: &tauri::AppHandle, video_path: &str) -> Option<PathBuf> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    video_path.hash(&mut hasher);
+    let dir = app.path().app_cache_dir().ok()?.join("video-thumbs");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir.join(format!("{:x}.jpg", hasher.finish())))
+}
+
+#[tauri::command]
+fn get_video_thumb(app: tauri::AppHandle, path: String) -> Option<String> {
+    let p = video_thumb_path(&app, &path)?;
+    if p.exists() { Some(p.to_string_lossy().to_string()) } else { None }
+}
+
+#[tauri::command]
+fn save_video_thumb(app: tauri::AppHandle, path: String, data_base64: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&data_base64)
+        .map_err(|e| e.to_string())?;
+    let p = video_thumb_path(&app, &path).ok_or("cache dir unavailable")?;
+    let tmp = p.with_extension("tmp");
+    fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &p).map_err(|e| e.to_string())?;
+    Ok(p.to_string_lossy().to_string())
+}
+
+// ── Subtitles ────────────────────────────────────────────────────────────────
+// Finds sidecar .vtt/.srt files next to the video ("Movie.srt", "Movie.en.srt").
+// .srt files are converted to WebVTT in the cache dir since <track> needs VTT.
+
+fn srt_to_vtt(srt: &str) -> String {
+    let mut out = String::with_capacity(srt.len() + 16);
+    out.push_str("WEBVTT\n\n");
+    for line in srt.lines() {
+        let trimmed = line.trim_start_matches('\u{feff}');
+        // Timestamp lines: replace decimal comma with dot (00:00:01,500 → 00:00:01.500)
+        if trimmed.contains("-->") {
+            out.push_str(&trimmed.replace(',', "."));
+        } else {
+            out.push_str(trimmed);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[tauri::command]
+fn get_video_subtitles(app: tauri::AppHandle, path: String) -> Result<Vec<SubtitleTrack>, String> {
+    let video = PathBuf::from(&path);
+    let dir = match video.parent() { Some(d) => d.to_path_buf(), None => return Ok(vec![]) };
+    let stem = video.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if stem.is_empty() { return Ok(vec![]); }
+
+    let mut tracks: Vec<SubtitleTrack> = Vec::new();
+    let entries = match fs::read_dir(&dir) { Ok(e) => e, Err(_) => return Ok(vec![]) };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let p = entry.path();
+        let ext = match p.extension().and_then(|e| e.to_str()) {
+            Some(e) => e.to_lowercase(),
+            None => continue,
+        };
+        if ext != "srt" && ext != "vtt" { continue; }
+        let sub_stem = p.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if !sub_stem.starts_with(&stem) { continue; }
+
+        // Label: the part between the video stem and the extension ("en", "spanish"…)
+        let label_raw = sub_stem[stem.len()..].trim_matches(|c| c == '.' || c == '-' || c == '_' || c == ' ').to_string();
+        let label = if label_raw.is_empty() { "Subtitles".to_string() } else { label_raw };
+
+        if ext == "vtt" {
+            tracks.push(SubtitleTrack { label, vtt_path: p.to_string_lossy().to_string() });
+        } else {
+            // Convert .srt → cached .vtt
+            let srt_content = match fs::read(&p) {
+                Ok(b) => String::from_utf8_lossy(&b).to_string(),
+                Err(_) => continue,
+            };
+            let cache_key = p.to_string_lossy().to_string();
+            let Some(mut vtt_path) = video_thumb_path(&app, &cache_key) else { continue };
+            vtt_path.set_extension("vtt");
+            if !vtt_path.exists() {
+                if fs::write(&vtt_path, srt_to_vtt(&srt_content)).is_err() { continue; }
+            }
+            tracks.push(SubtitleTrack { label, vtt_path: vtt_path.to_string_lossy().to_string() });
+        }
+    }
+    tracks.sort_by(|a, b| a.label.cmp(&b.label));
+    Ok(tracks)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_path = dirs::data_dir()
@@ -4836,7 +5483,200 @@ pub fn run() {
             delete_photo_from_library,
             clear_photos_library,
             get_photos_stats,
+            export_playlist_m3u,
+            export_playlist_pls,
+            fetch_missing_artwork,
+            scan_and_save_videos,
+            get_videos_count,
+            get_all_videos,
+            update_video_metadata,
+            clear_videos_library,
+            set_video_progress,
+            set_video_watched,
+            toggle_video_favorite,
+            delete_video_from_library,
+            get_video_thumb,
+            save_video_thumb,
+            get_video_subtitles,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── clean_primary_artist ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_clean_primary_artist_single() {
+        assert_eq!(clean_primary_artist("Radiohead"), "Radiohead");
+    }
+
+    #[test]
+    fn test_clean_primary_artist_feat() {
+        assert_eq!(clean_primary_artist("Drake feat. Future"), "Drake");
+        assert_eq!(clean_primary_artist("Jay-Z ft. Beyoncé"), "Jay-Z");
+        assert_eq!(clean_primary_artist("Foo featuring Bar"), "Foo");
+    }
+
+    #[test]
+    fn test_clean_primary_artist_slash() {
+        // Bare "/" with prefix > 2 chars
+        assert_eq!(clean_primary_artist("Fred again../Baby Keem"), "Fred again..");
+        // AC/DC must be preserved (prefix ≤ 2 chars)
+        assert_eq!(clean_primary_artist("AC/DC"), "AC/DC");
+    }
+
+    #[test]
+    fn test_clean_primary_artist_empty() {
+        assert_eq!(clean_primary_artist(""), "Unknown Artist");
+        assert_eq!(clean_primary_artist("   "), "Unknown Artist");
+    }
+
+    // ─── split_all_artists ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_split_all_artists_single() {
+        assert_eq!(split_all_artists("Radiohead"), vec!["Radiohead"]);
+    }
+
+    #[test]
+    fn test_split_all_artists_feat() {
+        let result = split_all_artists("Drake feat. Future");
+        assert_eq!(result, vec!["Drake", "Future"]);
+    }
+
+    #[test]
+    fn test_split_all_artists_slash() {
+        let result = split_all_artists("Fred again../Baby Keem");
+        assert_eq!(result, vec!["Fred again..", "Baby Keem"]);
+    }
+
+    #[test]
+    fn test_split_all_artists_preserves_acdc() {
+        let result = split_all_artists("AC/DC");
+        assert_eq!(result, vec!["AC/DC"]);
+    }
+
+    #[test]
+    fn test_split_all_artists_empty() {
+        let result = split_all_artists("");
+        assert!(result.is_empty());
+    }
+
+    // ─── album_hash / track_path_hash ─────────────────────────────────────────
+
+    #[test]
+    fn test_album_hash_deterministic() {
+        let h1 = album_hash("OK Computer", "Radiohead");
+        let h2 = album_hash("OK Computer", "Radiohead");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_album_hash_differs_on_input() {
+        let h1 = album_hash("OK Computer", "Radiohead");
+        let h2 = album_hash("Kid A", "Radiohead");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_album_hash_differs_on_artist() {
+        let h1 = album_hash("Debut", "Bjork");
+        let h2 = album_hash("Debut", "Other Artist");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_track_path_hash_deterministic() {
+        let h = track_path_hash("/music/song.mp3");
+        assert_eq!(h, track_path_hash("/music/song.mp3"));
+    }
+
+    // ─── word_search_params ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_word_search_single_word_returns_empty() {
+        let (sql, params) = word_search_params("hello", 2, &["title", "artist"]);
+        assert!(sql.is_empty());
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_word_search_two_words() {
+        let (sql, params) = word_search_params("hello world", 2, &["title", "artist"]);
+        assert!(!sql.is_empty());
+        // 2 words × 2 cols = 4 params
+        assert_eq!(params.len(), 4);
+        assert!(params.iter().all(|p| p.starts_with('%') && p.ends_with('%')));
+    }
+
+    #[test]
+    fn test_word_search_special_chars_not_injected() {
+        // SQL meta-chars / injection payloads must land in the params array (as LIKE patterns),
+        // never in the SQL template string.
+        let (sql, params) = word_search_params("rock'; DROP TABLE tracks;--", 1, &["genre"]);
+        // Two whitespace-separated tokens → non-empty SQL
+        assert!(!sql.is_empty());
+        // SQL template must only contain placeholders, not the raw user input
+        assert!(!sql.contains("DROP"));
+        assert!(!sql.contains("--"));
+        assert!(!sql.contains("rock'"));
+        // The first token should appear as a LIKE param (lowercased, wrapped in %)
+        assert!(params[0].contains("rock'"));
+    }
+
+    // ─── SQLite integration — search_genres parameterization ──────────────────
+
+    #[test]
+    fn test_sqlite_search_genres_no_injection() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE genres (genre TEXT);
+             INSERT INTO genres VALUES ('Rock');
+             INSERT INTO genres VALUES ('Classic Rock');
+             INSERT INTO genres VALUES ('Jazz');"
+        ).unwrap();
+
+        // A payload that would break naive string interpolation
+        let malicious = "'; DROP TABLE genres;--";
+        let pattern = format!("%{}%", malicious.to_lowercase());
+        let mut stmt = conn.prepare(
+            "SELECT genre FROM genres WHERE LOWER(genre) LIKE ? ORDER BY genre"
+        ).unwrap();
+        let rows: Vec<String> = stmt
+            .query_map(rusqlite::params![pattern], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // No rows should match, AND the table must still exist (not dropped)
+        assert!(rows.is_empty());
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM genres", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_sqlite_search_genres_special_chars() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE genres (genre TEXT);
+             INSERT INTO genres VALUES ('R&B');
+             INSERT INTO genres VALUES ('Rock');"
+        ).unwrap();
+
+        let pattern = "%r&b%";
+        let mut stmt = conn.prepare(
+            "SELECT genre FROM genres WHERE LOWER(genre) LIKE ?"
+        ).unwrap();
+        let rows: Vec<String> = stmt
+            .query_map(rusqlite::params![pattern], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(rows, vec!["R&B"]);
+    }
 }

@@ -128,6 +128,10 @@ interface SettingsState {
   activePresetId: string;
   customPresets: EqPreset[];
 
+  // Advanced
+  maxPagesInMemory: number;
+  maxConcurrentLoads: number;
+
   // Actions
   keyBindings: Record<ShortcutId, string>;
   keyBindings2: Record<ShortcutId, string>;
@@ -154,6 +158,8 @@ interface SettingsState {
   deleteCustomPreset: (id: string) => void;
   renameCustomPreset: (id: string, name: string) => void;
   getAllPresets: () => EqPreset[];
+  setMaxPagesInMemory: (v: number) => void;
+  setMaxConcurrentLoads: (v: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -170,6 +176,8 @@ export const useSettingsStore = create<SettingsState>()(
       crossfadeDuration: 0,
       normalizeVolume: false,
       eqEnabled: false,
+      maxPagesInMemory: 6,
+      maxConcurrentLoads: 2,
       eqBands: [...DEFAULT_BANDS],
       activePresetId: "flat",
       customPresets: [],
@@ -241,6 +249,9 @@ export const useSettingsStore = create<SettingsState>()(
       getAllPresets: () => {
         return [...BUILT_IN_PRESETS, ...get().customPresets];
       },
+
+      setMaxPagesInMemory: (maxPagesInMemory) => set({ maxPagesInMemory }),
+      setMaxConcurrentLoads: (maxConcurrentLoads) => set({ maxConcurrentLoads }),
     }),
     {
       name: "libera-settings",

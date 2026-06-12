@@ -4,10 +4,10 @@ import { NavRail } from "./NavRail";
 import { MusicLibrary } from "./MusicLibrary";
 import { BookLibrary } from "./BookLibrary";
 import { PhotoLibrary } from "./PhotoLibrary";
+import { VideoLibrary } from "./VideoLibrary";
 import { SearchPage } from "../../pages/SearchPage";
 import { SettingsPage } from "../../pages/SettingsPage";
 import { CacheProgress } from "./CacheProgress";
-import { UnderConstruction } from "./UnderConstruction";
 import { useCacheStore } from "../../store/cacheStore";
 import { useNavigationStore, registerSectionSetter, syncSection } from "../../store/navigationStore";
 
@@ -73,12 +73,7 @@ export function Shell() {
               className="h-full"
             >
               {activeSection === "music" && <MusicLibrary />}
-              {activeSection === "films" && (
-                <UnderConstruction
-                  name="Films"
-                  description="Video library and player — coming in the next major release."
-                />
-              )}
+              {activeSection === "films" && <VideoLibrary />}
               {activeSection === "pictures" && <PhotoLibrary />}
               {activeSection === "books" && <BookLibrary />}
               {activeSection === "search" && <SearchPage />}

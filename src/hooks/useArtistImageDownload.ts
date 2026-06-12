@@ -62,20 +62,33 @@ export function useArtistImageDownload() {
 
   async function pause() {
     if (!isDownloading || isPaused) return;
-    await invoke("pause_artist_image_download").catch(console.error);
-    setPaused(true);
+    try {
+      await invoke("pause_artist_image_download");
+      setPaused(true);
+    } catch (e) {
+      showToast("Couldn't pause download — " + String(e).slice(0, 60));
+    }
   }
 
   async function resume() {
     if (!isDownloading || !isPaused) return;
-    await invoke("resume_artist_image_download").catch(console.error);
-    setPaused(false);
+    try {
+      await invoke("resume_artist_image_download");
+      setPaused(false);
+    } catch (e) {
+      showToast("Couldn't resume download — " + String(e).slice(0, 60));
+    }
   }
 
   async function cancel() {
     if (!isDownloading) return;
-    await invoke("cancel_artist_image_download").catch(console.error);
-    // finishDownload is called via the cancelled event listener
+    try {
+      await invoke("cancel_artist_image_download");
+      // finishDownload is called via the cancelled event listener
+    } catch (e) {
+      showToast("Couldn't cancel download — " + String(e).slice(0, 60));
+      finishDownload();
+    }
   }
 
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0;

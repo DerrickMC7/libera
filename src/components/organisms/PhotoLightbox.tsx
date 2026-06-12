@@ -453,6 +453,7 @@ export function PhotoLightbox() {
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <button
               onClick={closeLightbox}
+              aria-label="Close"
               className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/70 hover:text-white"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -470,26 +471,26 @@ export function PhotoLightbox() {
 
           <div className="flex items-center gap-0.5 sm:gap-1 overflow-x-auto scrollbar-none min-w-0">
             {/* Zoom */}
-            <button onClick={zoomOut} className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white">
+            <button onClick={zoomOut} aria-label="Zoom out" className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35M8 11h6" />
               </svg>
             </button>
             <span className="text-white/40 text-xs w-12 text-center font-mono">{Math.round(zoomDisplay * 100)}%</span>
-            <button onClick={zoomIn} className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white">
+            <button onClick={zoomIn} aria-label="Zoom in" className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35M11 8v6M8 11h6" />
               </svg>
             </button>
-            <button onClick={resetZoom} className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/40 hover:text-white text-xs font-mono">
+            <button onClick={resetZoom} aria-label="Reset zoom" className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/40 hover:text-white text-xs font-mono">
               1:1
             </button>
 
             {/* Rotate */}
             <button
               onClick={() => { rotationRef.current = (rotationRef.current + 90) % 360; setRotation(rotationRef.current); applyTransform(); }}
+              aria-label="Rotate 90°"
               className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white"
-              title="Rotate 90° (R)"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M1 4v6h6" /><path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
@@ -502,6 +503,8 @@ export function PhotoLightbox() {
             {/* Favorite */}
             <button
               onClick={() => toggleFavorite({ path: photo.path })}
+              aria-label={photo.is_favorite ? "Remove from favorites" : "Add to favorites"}
+              aria-pressed={photo.is_favorite}
               className="p-2 rounded-lg hover:bg-white/10 transition-colors"
             >
               <svg width="18" height="18" viewBox="0 0 24 24"
@@ -515,8 +518,9 @@ export function PhotoLightbox() {
             {/* Slideshow */}
             <button
               onClick={() => setSlideshowActive((v) => !v)}
+              aria-label={slideshowActive ? "Stop slideshow" : "Start slideshow"}
+              aria-pressed={slideshowActive}
               className={`p-2 rounded-lg transition-colors ${slideshowActive ? "bg-white/15 text-white" : "hover:bg-white/10 text-white/60 hover:text-white"}`}
-              title={slideshowActive ? "Stop slideshow (S)" : "Start slideshow (S)"}
             >
               {slideshowActive ? (
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -541,8 +545,9 @@ export function PhotoLightbox() {
             </select>
             <button
               onClick={() => setSlideshowLoop((v) => !v)}
+              aria-label={slideshowLoop ? "Loop: on" : "Loop: off"}
+              aria-pressed={slideshowLoop}
               className={`p-1.5 rounded transition-colors ${slideshowLoop ? "text-[var(--accent)]" : "text-white/30 hover:text-white/60"}`}
-              title={slideshowLoop ? "Loop: on" : "Loop: off"}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
@@ -558,8 +563,9 @@ export function PhotoLightbox() {
                   if (next >= 0) setCompareIndex(next);
                 }
               }}
+              aria-label={compareMode ? "Exit compare" : "Compare photos"}
+              aria-pressed={compareMode}
               className={`p-2 rounded-lg transition-colors ${compareMode ? "bg-white/15 text-white" : "hover:bg-white/10 text-white/60 hover:text-white"}`}
-              title="Compare photos (X)"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="2" y="3" width="9" height="18" rx="1"/><rect x="13" y="3" width="9" height="18" rx="1"/>
@@ -569,8 +575,8 @@ export function PhotoLightbox() {
             {/* Print */}
             <button
               onClick={printPhoto}
+              aria-label="Print photo"
               className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white"
-              title="Print photo (P)"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M6 9V2h12v7"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
@@ -581,8 +587,8 @@ export function PhotoLightbox() {
             {!IS_DEMO && (
               <button
                 onClick={openWithSystem}
+                aria-label="Open with system viewer"
                 className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white"
-                title="Open with system viewer"
               >
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
@@ -594,8 +600,9 @@ export function PhotoLightbox() {
             {/* Adjust */}
             <button
               onClick={() => setShowAdjust((v) => !v)}
+              aria-label={showAdjust ? "Close adjustments" : "Adjust image"}
+              aria-pressed={showAdjust}
               className={`p-2 rounded-lg transition-colors ${showAdjust ? "bg-white/15 text-white" : "hover:bg-white/10 text-white/60 hover:text-white"}`}
-              title="Adjust image"
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
@@ -610,8 +617,8 @@ export function PhotoLightbox() {
             {IS_DEMO && (
               <button
                 onClick={downloadPhoto}
+                aria-label="Download photo"
                 className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/60 hover:text-white"
-                title="Download photo"
               >
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
@@ -624,8 +631,9 @@ export function PhotoLightbox() {
             {/* Fullscreen toggle */}
             <button
               onClick={toggleFullscreen}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              aria-pressed={isFullscreen}
               className={`p-2 rounded-lg transition-colors ${isFullscreen ? "bg-white/15 text-white" : "hover:bg-white/10 text-white/60 hover:text-white"}`}
-              title={isFullscreen ? "Exit fullscreen (G)" : "Fullscreen (G)"}
             >
               {isFullscreen ? (
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -641,6 +649,8 @@ export function PhotoLightbox() {
             {/* Info panel toggle */}
             <button
               onClick={() => setShowInfo((v) => !v)}
+              aria-label={showInfo ? "Close info panel" : "Show photo info"}
+              aria-pressed={showInfo}
               className={`p-2 rounded-lg transition-colors ${showInfo ? "bg-white/15 text-white" : "hover:bg-white/10 text-white/60 hover:text-white"}`}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -753,6 +763,7 @@ export function PhotoLightbox() {
             {hasPrev && (
               <button
                 onClick={goPrev}
+                aria-label="Previous photo"
                 className="absolute left-4 top-1/2 -translate-y-1/2 z-10 p-3 rounded-full bg-black/50 hover:bg-black/80 text-white transition-colors"
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -835,6 +846,7 @@ export function PhotoLightbox() {
             {hasNext && (
               <button
                 onClick={goNext}
+                aria-label="Next photo"
                 className="absolute right-4 top-1/2 -translate-y-1/2 z-10 p-3 rounded-full bg-black/50 hover:bg-black/80 text-white transition-colors"
               >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -874,6 +886,8 @@ export function PhotoLightbox() {
                           <button
                             key={star}
                             onClick={() => photo && setRating({ path: photo.path, rating: star === photo.rating ? 0 : star })}
+                            aria-label={`Rate ${star} star${star !== 1 ? "s" : ""}`}
+                            aria-pressed={star <= photo.rating}
                             className="transition-colors"
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24"
@@ -1329,6 +1343,8 @@ const ThumbnailStrip = memo(function ThumbnailStrip({
           key={p.path}
           ref={i === currentIndex ? activeRef : null}
           onClick={() => onSelect(i)}
+          aria-label={`Photo ${i + 1}: ${p.name}`}
+          aria-current={i === currentIndex ? "true" : undefined}
           className="relative shrink-0 rounded overflow-hidden transition-all"
           style={{
             width: 48,

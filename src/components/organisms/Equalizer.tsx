@@ -1,12 +1,98 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useSettingsStore } from "../../store/settingsStore";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 
 interface EqualizerProps {
   onClose?: () => void;
   compact?: boolean;
+  analyserRef?: React.RefObject<AnalyserNode | null>;
 }
 
-export function Equalizer({ onClose, compact = false }: EqualizerProps) {
+// EQ band center frequencies matching the settingsStore bands
+const BAND_FREQS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+
+function SpectrumAnalyser({ analyserRef, enabled }: { analyserRef: React.RefObject<AnalyserNode | null>; enabled: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rafRef = useRef<number>(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Keep canvas internal resolution in sync with its CSS width so bar
+    // positions are calculated in real pixels (no scaling distortion).
+    const syncWidth = () => { canvas.width = canvas.offsetWidth; };
+    syncWidth();
+    const ro = new ResizeObserver(syncWidth);
+    ro.observe(canvas);
+
+    const fftSize = 512;
+    const dataArray = new Uint8Array(fftSize / 2);
+    // Must match the CSS gap-2 (8px) used between the flex EQ band sliders
+    const GAP = 8;
+
+    function freqToBin(freq: number, sampleRate: number): number {
+      return Math.round((freq / (sampleRate / 2)) * (fftSize / 2));
+    }
+
+    function draw() {
+      rafRef.current = requestAnimationFrame(draw);
+      const analyser = analyserRef.current;
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const barW = (w - 9 * GAP) / 10;
+
+      if (!analyser || !enabled) {
+        ctx.fillStyle = "rgba(42,40,32,0.5)";
+        for (let i = 0; i < 10; i++) {
+          ctx.fillRect(Math.round(i * (barW + GAP)), h - 2, Math.round(barW), 2);
+        }
+        return;
+      }
+
+      // Snappier response: lower smoothing = bars react faster to transients
+      analyser.smoothingTimeConstant = 0.65;
+      analyser.getByteFrequencyData(dataArray);
+      const sampleRate = analyser.context.sampleRate;
+
+      BAND_FREQS.forEach((freq, i) => {
+        const bin = freqToBin(freq, sampleRate);
+        let sum = 0, count = 0;
+        for (let b = Math.max(0, bin - 2); b <= Math.min(dataArray.length - 1, bin + 2); b++) {
+          sum += dataArray[b]; count++;
+        }
+        const val = count > 0 ? sum / count : 0;
+        const barH = Math.max(2, (val / 255) * h);
+        const x = Math.round(i * (barW + GAP));
+        const bw = Math.round(barW);
+
+        const grad = ctx.createLinearGradient(0, h - barH, 0, h);
+        grad.addColorStop(0, "rgba(212,135,42,0.9)");
+        grad.addColorStop(1, "rgba(212,135,42,0.2)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, h - barH, bw, barH);
+      });
+    }
+
+    draw();
+    return () => { cancelAnimationFrame(rafRef.current); ro.disconnect(); };
+  }, [analyserRef, enabled]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      height={64}
+      className="w-full rounded-md"
+      style={{ display: "block", background: "rgba(15,14,11,0.6)" }}
+    />
+  );
+}
+
+export function Equalizer({ onClose, compact = false, analyserRef }: EqualizerProps) {
   const {
     eqEnabled, eqBands, activePresetId, customPresets,
     setEqEnabled, setEqBand, applyPreset,
@@ -20,6 +106,8 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
   const [editingName, setEditingName] = useState("");
 
   const allPresets = getAllPresets();
+  const panelRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(panelRef, compact); // compact=true means it's the popup EQ
 
   function handleSave() {
     if (!savingName.trim()) return;
@@ -33,7 +121,12 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
   }
 
   return (
-    <div className={`bg-[#161410] border border-white/8 rounded-xl ${compact ? "p-4 w-80" : "p-6 w-full"}`}>
+    <div
+      ref={panelRef}
+      role={compact ? "dialog" : undefined}
+      aria-label={compact ? "Equalizer" : undefined}
+      className={`bg-[#161410] border border-white/8 rounded-xl ${compact ? "p-4 w-80" : "p-6 w-full"}`}
+    >
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
@@ -134,6 +227,13 @@ export function Equalizer({ onClose, compact = false }: EqualizerProps) {
           </button>
         )}
       </div>
+
+      {/* Spectrum */}
+      {analyserRef && (
+        <div className="mb-3">
+          <SpectrumAnalyser analyserRef={analyserRef} enabled={eqEnabled} />
+        </div>
+      )}
 
       {/* Bands */}
       <div className={`flex items-end gap-2 ${compact ? "h-28" : "h-36"}`}>

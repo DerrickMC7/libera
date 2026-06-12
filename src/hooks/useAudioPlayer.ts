@@ -17,9 +17,12 @@ export function useAudioPlayer() {
   const gainARef    = useRef<GainNode | null>(null);
   const gainBRef    = useRef<GainNode | null>(null);
   const ctxRef      = useRef<AudioContext | null>(null);
-  const filtersRef  = useRef<BiquadFilterNode[]>([]);
-  const compRef     = useRef<DynamicsCompressorNode | null>(null);
-  const graphReady  = useRef(false);
+  const filtersRef    = useRef<BiquadFilterNode[]>([]);
+  const compRef       = useRef<DynamicsCompressorNode | null>(null);
+  const analyserRef   = useRef<AnalyserNode | null>(null);
+  const rgGainRef     = useRef<GainNode | null>(null);  // ReplayGain offset node
+  const masterGainRef = useRef<GainNode | null>(null);  // user volume (smoothed)
+  const graphReady    = useRef(false);
   const activeSlot  = useRef<"A" | "B">("A");
   const crossfading = useRef(false);
   const xfadeTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -51,11 +54,13 @@ export function useAudioPlayer() {
         if (activeSlot.current !== slot) return;
         setProgress(audio.currentTime);
 
-        const fade = useSettingsStore.getState().crossfadeDuration;
-        if (fade <= 0 || crossfading.current || !audio.duration) return;
+        const { crossfadeDuration } = useSettingsStore.getState();
+        if (crossfading.current || !audio.duration) return;
         const timeLeft = audio.duration - audio.currentTime;
-        if (timeLeft > 0 && timeLeft <= fade) {
-          triggerCrossfade(slot, fade, timeLeft);
+
+        if (crossfadeDuration > 0 && timeLeft > 0 && timeLeft <= crossfadeDuration) {
+          // Crossfade mode: ramp gains
+          triggerCrossfade(slot, crossfadeDuration, timeLeft);
         }
       });
 
@@ -70,9 +75,9 @@ export function useAudioPlayer() {
         if (repeat === "one") {
           audio.currentTime = 0;
           audio.play().catch(console.error);
-        } else {
-          usePlayerStore.getState().nextTrack();
+          return;
         }
+        usePlayerStore.getState().nextTrack();
       });
     }
 
@@ -93,8 +98,26 @@ export function useAudioPlayer() {
 
     return () => {
       audioA.pause(); audioB.pause();
-      ctxRef.current?.close();
+      ctxRef.current?.close().catch(() => {});
       window.removeEventListener("keydown", onKeyDown);
+
+      // Full reset so a re-run of this effect (Vite HMR / StrictMode / remount)
+      // rebuilds the graph from scratch. Without this, graphReady survives as a
+      // ref while the context above is closed — ensureGraph() then no-ops and
+      // every ctx.resume() rejects: UI works, but audio is permanently silent.
+      graphReady.current    = false;
+      ctxRef.current        = null;
+      gainARef.current      = null;
+      gainBRef.current      = null;
+      filtersRef.current    = [];
+      compRef.current       = null;
+      analyserRef.current   = null;
+      rgGainRef.current     = null;
+      masterGainRef.current = null;
+      activeSlot.current    = "A";
+      crossfading.current   = false;
+      if (xfadeTimer.current !== null) { clearTimeout(xfadeTimer.current); xfadeTimer.current = null; }
+      loadedPathRef.current      = "";
     };
   }, []);
 
@@ -144,7 +167,6 @@ export function useAudioPlayer() {
     const triggeredAt = ctx.currentTime;
 
     tAudio.src    = convertFileSrc(nextTrack.path);
-    tAudio.volume = store.isMuted ? 0 : store.volume;
     loadedPathRef.current = nextTrack.path;
 
     function cleanup() {
@@ -215,7 +237,10 @@ export function useAudioPlayer() {
     if (!aA || !aB) return;
     graphReady.current = true;
 
-    const ctx = new AudioContext();
+    // "playback" = larger render buffers. The default ("interactive") uses the
+    // smallest buffer the hardware allows, which underruns (audible crackle)
+    // whenever the main thread stalls. Music playback doesn't need low latency.
+    const ctx = new AudioContext({ latencyHint: "playback" });
     ctxRef.current = ctx;
 
     const srcA = ctx.createMediaElementSource(aA);
@@ -236,6 +261,11 @@ export function useAudioPlayer() {
     });
     filtersRef.current = filters;
 
+    // ReplayGain offset node — sits between EQ filters and compressor.
+    // Unity gain (0 dB) by default; adjusted per-track when normalizeVolume is on.
+    const rgGain = ctx.createGain(); rgGain.gain.value = 1;
+    rgGainRef.current = rgGain;
+
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = 0; comp.knee.value = 0; comp.ratio.value = 1;
     comp.attack.value = 0.003; comp.release.value = 0.25;
@@ -246,12 +276,34 @@ export function useAudioPlayer() {
       gainA.connect(filters[0]);
       gainB.connect(filters[0]);
       for (let i = 0; i < filters.length - 1; i++) filters[i].connect(filters[i + 1]);
-      filters[filters.length - 1].connect(comp);
+      filters[filters.length - 1].connect(rgGain);
     } else {
-      gainA.connect(comp);
-      gainB.connect(comp);
+      gainA.connect(rgGain);
+      gainB.connect(rgGain);
     }
-    comp.connect(ctx.destination);
+    rgGain.connect(comp);
+
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.8;
+    comp.connect(analyser);
+    analyserRef.current = analyser;
+
+    // User volume lives here as a GainNode so changes can be ramped
+    // (setTargetAtTime) instead of the stepped jumps HTMLMediaElement.volume
+    // produces — discrete steps at slider-drag rate are audible zipper noise.
+    // Placed after the analyser so the spectrum display is volume-independent.
+    const { volume: v, isMuted: m } = usePlayerStore.getState();
+    const masterGain = ctx.createGain();
+    masterGain.gain.value = m ? 0 : v;
+    masterGainRef.current = masterGain;
+    analyser.connect(masterGain);
+    masterGain.connect(ctx.destination);
+
+    // Element volume must stay at 1 from here on — attenuating both at the
+    // element AND the masterGain would double-apply the volume.
+    aA.volume = 1;
+    aB.volume = 1;
 
     const { eqEnabled, eqBands: eb, normalizeVolume } = useSettingsStore.getState();
     eb.forEach((b, i) => { if (filters[i]) filters[i].gain.value = eqEnabled ? b.gain : 0; });
@@ -266,7 +318,7 @@ export function useAudioPlayer() {
     if (!currentTrack) return;
     if (loadedPathRef.current === currentTrack.path) return;
 
-    // New path — abort crossfade if one is running, then load
+    // New path — abort any crossfade, then load
     abortCrossfade();
     const audio = activeSlot.current === "A" ? audioARef.current : audioBRef.current;
     if (audio) {
@@ -277,9 +329,17 @@ export function useAudioPlayer() {
 
   // ─── Play / pause ─────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!currentTrack) return;
     const audio = activeSlot.current === "A" ? audioARef.current : audioBRef.current;
     if (!audio) return;
+
+    if (!currentTrack) {
+      // Player closed — stop both slots and release file handles
+      audioARef.current?.pause(); if (audioARef.current) audioARef.current.src = "";
+      audioBRef.current?.pause(); if (audioBRef.current) audioBRef.current.src = "";
+      loadedPathRef.current = "";
+      return;
+    }
+
     if (isPlaying) {
       ensureGraph();
       ctxRef.current?.resume().then(() => audio.play()).catch(console.error);
@@ -289,9 +349,18 @@ export function useAudioPlayer() {
   }, [isPlaying, currentTrack]);
 
   // ─── Volume ───────────────────────────────────────────────────────────────
+  // Once the graph exists, volume is a smoothed ramp on the master GainNode
+  // (~90ms to settle — inaudible as a ramp, but kills zipper noise from rapid
+  // slider movements). The element-volume branch only matters pre-first-play.
   useEffect(() => {
     const effective = isMuted ? 0 : volume;
-    [audioARef, audioBRef].forEach((r) => { if (r.current) r.current.volume = effective; });
+    const ctx = ctxRef.current;
+    const mg  = masterGainRef.current;
+    if (ctx && mg) {
+      mg.gain.setTargetAtTime(effective, ctx.currentTime, 0.03);
+    } else {
+      [audioARef, audioBRef].forEach((r) => { if (r.current) r.current.volume = effective; });
+    }
   }, [volume, isMuted]);
 
   // ─── EQ ───────────────────────────────────────────────────────────────────
@@ -310,6 +379,23 @@ export function useAudioPlayer() {
     if (normalizeVolume) { comp.threshold.value = -24; comp.knee.value = 30; comp.ratio.value = 12; }
     else                 { comp.threshold.value = 0;   comp.knee.value = 0;  comp.ratio.value = 1;  }
   }, [normalizeVolume]);
+
+  // ─── ReplayGain offset ───────────────────────────────────────────────────
+  // Apply track gain (preferred) or album gain from the embedded tag.
+  // Only active when normalizeVolume is on. A +/- dB value is converted to
+  // a linear multiplier: gain = 10^(dB/20). Pre-amp headroom: +/- 12 dB max.
+  useEffect(() => {
+    const node = rgGainRef.current;
+    if (!node) return;
+    if (!normalizeVolume || !currentTrack) {
+      node.gain.value = 1;
+      return;
+    }
+    const dB = currentTrack.replay_gain_track ?? currentTrack.replay_gain_album;
+    if (dB == null) { node.gain.value = 1; return; }
+    const clamped = Math.max(-12, Math.min(12, dB));
+    node.gain.value = Math.pow(10, clamped / 20);
+  }, [currentTrack, normalizeVolume]);
 
   // ─── Media Session API ────────────────────────────────────────────────────
   useEffect(() => {
@@ -339,5 +425,5 @@ export function useAudioPlayer() {
     setProgress(time);
   }
 
-  return { progress, duration, seek, audioRef: audioARef };
+  return { progress, duration, seek, audioRef: audioARef, analyserRef };
 }

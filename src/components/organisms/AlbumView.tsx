@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { Track } from "../../types/track";
@@ -7,6 +8,7 @@ import { useArtwork } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
 import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { useToastStore } from "../../store/toastStore";
 
 interface AlbumViewProps {
   album: Album;
@@ -16,6 +18,9 @@ interface AlbumViewProps {
 export function AlbumView({ album, onBack }: AlbumViewProps) {
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
   const { data: artworkUrl } = useArtwork(album.cover_path);
+  const { show: showToast } = useToastStore();
+  const qc = useQueryClient();
+  const [fetchingArt, setFetchingArt] = useState(false);
 
   const { data: tracks = [] } = useQuery({
     queryKey: ["album-tracks", album.album, album.artist],
@@ -40,6 +45,22 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
 
   const totalDuration = tracks.reduce((sum, t) => sum + t.duration_secs, 0);
   const totalMins = Math.floor(totalDuration / 60);
+
+  async function handleFetchArt() {
+    setFetchingArt(true);
+    try {
+      await invoke("fetch_missing_artwork", {
+        albumName: album.album,
+        albumArtist: album.artist,
+      });
+      await qc.invalidateQueries({ queryKey: ["artwork", album.cover_path] });
+      showToast("Cover art fetched successfully");
+    } catch (e) {
+      showToast("Couldn't fetch cover art — " + String(e).slice(0, 70));
+    } finally {
+      setFetchingArt(false);
+    }
+  }
 
   return (
     <div className="flex flex-col h-full bg-[#0e0d0b] overflow-y-auto">
@@ -99,15 +120,35 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
             </p>
 
             {/* Play button */}
-            <button
-              onClick={handlePlayAll}
-              className="mt-4 flex items-center gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-mono tracking-widest uppercase px-5 py-2.5 rounded-full transition-colors w-fit"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-              Play all
-            </button>
+            <div className="mt-4 flex items-center gap-3 flex-wrap">
+              <button
+                onClick={handlePlayAll}
+                className="flex items-center gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-mono tracking-widest uppercase px-5 py-2.5 rounded-full transition-colors"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+                Play all
+              </button>
+              {!artworkUrl && (
+                <button
+                  onClick={handleFetchArt}
+                  disabled={fetchingArt}
+                  className="flex items-center gap-2 border border-white/15 hover:border-white/30 text-[#7a7060] hover:text-[#c8bfa8] text-xs font-mono px-4 py-2.5 rounded-full transition-colors disabled:opacity-50"
+                >
+                  {fetchingArt ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10" strokeOpacity="0.25" /><path d="M12 2a10 10 0 0 1 10 10" />
+                    </svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" />
+                    </svg>
+                  )}
+                  {fetchingArt ? "Fetching…" : "Fetch cover art"}
+                </button>
+              )}
+            </div>
           </motion.div>
         </div>
       </div>

@@ -44,6 +44,8 @@ export const DEMO_TRACKS: Track[] = [
     channels: 2,
     file_size: 1361952,
     mbid: null,
+    replay_gain_track: null,
+    replay_gain_album: null,
   },
   {
     path: "/audio/beethoven-moonlight-sonata.mp3",
@@ -63,6 +65,8 @@ export const DEMO_TRACKS: Track[] = [
     channels: 2,
     file_size: 8316510,
     mbid: null,
+    replay_gain_track: null,
+    replay_gain_album: null,
   },
   {
     path: "/audio/chopin-nocturne-op9-no1.mp3",
@@ -82,6 +86,8 @@ export const DEMO_TRACKS: Track[] = [
     channels: 2,
     file_size: 7873851,
     mbid: null,
+    replay_gain_track: null,
+    replay_gain_album: null,
   },
   {
     path: "/audio/chopin-nocturne-op9-no2.mp3",
@@ -101,6 +107,8 @@ export const DEMO_TRACKS: Track[] = [
     channels: 2,
     file_size: 4799250,
     mbid: null,
+    replay_gain_track: null,
+    replay_gain_album: null,
   },
   {
     path: "/audio/bach-bwv-846-prelude.mp3",
@@ -120,6 +128,8 @@ export const DEMO_TRACKS: Track[] = [
     channels: 2,
     file_size: 3069356,
     mbid: null,
+    replay_gain_track: null,
+    replay_gain_album: null,
   },
   {
     path: "/audio/mozart-eine-kleine-nachtmusik.mp3",
@@ -139,6 +149,8 @@ export const DEMO_TRACKS: Track[] = [
     channels: 2,
     file_size: 7567258,
     mbid: null,
+    replay_gain_track: null,
+    replay_gain_album: null,
   },
   {
     path: "/audio/debussy-clair-de-lune.mp3",
@@ -158,6 +170,8 @@ export const DEMO_TRACKS: Track[] = [
     channels: 2,
     file_size: 7548416,
     mbid: null,
+    replay_gain_track: null,
+    replay_gain_album: null,
   },
 ];
 
@@ -290,6 +304,30 @@ const DEMO_COLLECTION_ITEMS: Record<number, string[]> = {
   1: DEMO_PHOTOS.slice(0, 3).map((p) => p.path),
   2: DEMO_PHOTOS.slice(3, 5).map((p) => p.path),
 };
+
+// ── Demo videos (films + a series with two seasons) ──────────────────────────
+const NOW = Math.floor(Date.now() / 1000);
+function demoVideo(over: Partial<import("../types/video").Video> & { id: number; path: string; title: string }): import("../types/video").Video {
+  return {
+    format: "mp4", file_size: 700 * 1024 * 1024, date_added: NOW - over.id * 86400,
+    duration_secs: 0, width: 1920, height: 1080, folder: "/videos",
+    watched_secs: 0, last_watched: 0, is_favorite: false, series: "", season: 0, episode: 0,
+    ...over,
+  };
+}
+const DEMO_VIDEOS: import("../types/video").Video[] = [
+  demoVideo({ id: 1, path: "/videos/voyage-dans-la-lune-1902.mp4", title: "Le Voyage dans la Lune", duration_secs: 780, width: 3840, height: 2160, is_favorite: true, watched_secs: 780, last_watched: NOW - 86400 * 3 }),
+  demoVideo({ id: 2, path: "/videos/the-general-1926.mp4", title: "The General", duration_secs: 4620, watched_secs: 1900, last_watched: NOW - 3600 * 5 }),
+  demoVideo({ id: 3, path: "/videos/metropolis-1927.mp4", title: "Metropolis", duration_secs: 8880, format: "mkv" }),
+  demoVideo({ id: 4, path: "/videos/nosferatu-1922.mp4", title: "Nosferatu", duration_secs: 5640, width: 1280, height: 720 }),
+  demoVideo({ id: 5, path: "/videos/safety-last-1923.mp4", title: "Safety Last!", duration_secs: 4400, is_favorite: true }),
+  // Series: Cosmos Journeys — S01 (3 eps) + S02 (2 eps)
+  demoVideo({ id: 6, path: "/videos/cosmos/S01/Cosmos.Journeys.S01E01.mp4", title: "The Pale Blue Dot", series: "Cosmos Journeys", season: 1, episode: 1, duration_secs: 2700, watched_secs: 2700, last_watched: NOW - 86400 * 6 }),
+  demoVideo({ id: 7, path: "/videos/cosmos/S01/Cosmos.Journeys.S01E02.mp4", title: "Rivers of Starlight", series: "Cosmos Journeys", season: 1, episode: 2, duration_secs: 2700, watched_secs: 1200, last_watched: NOW - 86400 * 2 }),
+  demoVideo({ id: 8, path: "/videos/cosmos/S01/Cosmos.Journeys.S01E03.mp4", title: "Gravity's Embrace", series: "Cosmos Journeys", season: 1, episode: 3, duration_secs: 2700 }),
+  demoVideo({ id: 9, path: "/videos/cosmos/S02/Cosmos.Journeys.S02E01.mp4", title: "Echoes of Creation", series: "Cosmos Journeys", season: 2, episode: 1, duration_secs: 2880 }),
+  demoVideo({ id: 10, path: "/videos/cosmos/S02/Cosmos.Journeys.S02E02.mp4", title: "The Quiet Dark", series: "Cosmos Journeys", season: 2, episode: 2, duration_secs: 2880, format: "mkv" }),
+];
 
 export function mockInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const q = ((args?.query as string) || "").toLowerCase();
@@ -667,6 +705,40 @@ export function mockInvoke<T>(command: string, args?: Record<string, unknown>): 
     case "scan_photos":
     case "save_photos":
     case "clear_photos_library":
+      return Promise.resolve(null as unknown as T);
+
+    case "get_all_videos":
+      return Promise.resolve([...DEMO_VIDEOS] as unknown as T);
+
+    case "get_videos_count":
+      return Promise.resolve(DEMO_VIDEOS.length as unknown as T);
+
+    case "set_video_progress": {
+      const v = DEMO_VIDEOS.find((x) => x.path === (args?.path as string));
+      if (v) { v.watched_secs = (args?.watchedSecs as number) ?? 0; v.last_watched = NOW; }
+      return Promise.resolve(undefined as unknown as T);
+    }
+
+    case "set_video_watched": {
+      const v = DEMO_VIDEOS.find((x) => x.path === (args?.path as string));
+      if (v) v.watched_secs = args?.watched ? (v.duration_secs || 1) : 0;
+      return Promise.resolve(undefined as unknown as T);
+    }
+
+    case "toggle_video_favorite": {
+      const v = DEMO_VIDEOS.find((x) => x.path === (args?.path as string));
+      if (v) v.is_favorite = !v.is_favorite;
+      return Promise.resolve((v?.is_favorite ?? false) as unknown as T);
+    }
+
+    case "delete_video_from_library": {
+      const i = DEMO_VIDEOS.findIndex((x) => x.path === (args?.path as string));
+      if (i !== -1) DEMO_VIDEOS.splice(i, 1);
+      return Promise.resolve(undefined as unknown as T);
+    }
+
+    case "get_video_thumb":
+    case "get_video_subtitles":
       return Promise.resolve(null as unknown as T);
 
     default:

@@ -81,6 +81,7 @@ export function SettingsPage() {
     setShortcut, resetShortcut, resetAllShortcuts,
     setShortcut2, resetShortcut2, resetAllShortcuts2,
     setAutoplay, setCrossfadeDuration, setNormalizeVolume,
+    maxPagesInMemory, maxConcurrentLoads, setMaxPagesInMemory, setMaxConcurrentLoads,
   } = useSettingsStore();
 
   const [recordingId, setRecordingId] = useState<ShortcutId | null>(null);
@@ -384,6 +385,52 @@ export function SettingsPage() {
                   )}
                 </div>
               )}
+            </div>
+
+            {/* Advanced */}
+            <div className="flex items-center gap-3 mb-5">
+              <span className="text-[9px] font-mono tracking-[0.18em] uppercase text-[#5a5244]">Advanced</span>
+              <div className="flex-1 h-px bg-white/5" />
+            </div>
+            <div className="flex flex-col gap-3 mb-8">
+              <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-[#161410] border border-white/5">
+                <div className="min-w-0">
+                  <p className="text-sm text-[#f0ead8]">Pages kept in memory</p>
+                  <p className="text-xs text-[#3a3628] mt-0.5">
+                    Max track-list pages held in RAM. Higher = smoother scrolling, more memory. Default: 6.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setMaxPagesInMemory(Math.max(2, maxPagesInMemory - 1))}
+                    className="w-7 h-7 rounded-lg bg-[#1f1d18] hover:bg-[#2a2820] text-[#c8bfa8] text-sm transition-colors flex items-center justify-center"
+                  >−</button>
+                  <span className="w-6 text-center text-sm font-mono text-[#c8bfa8]">{maxPagesInMemory}</span>
+                  <button
+                    onClick={() => setMaxPagesInMemory(Math.min(20, maxPagesInMemory + 1))}
+                    className="w-7 h-7 rounded-lg bg-[#1f1d18] hover:bg-[#2a2820] text-[#c8bfa8] text-sm transition-colors flex items-center justify-center"
+                  >+</button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-[#161410] border border-white/5">
+                <div className="min-w-0">
+                  <p className="text-sm text-[#f0ead8]">Concurrent page loads</p>
+                  <p className="text-xs text-[#3a3628] mt-0.5">
+                    How many track pages load in parallel while scrolling. Lower = less CPU. Default: 2.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setMaxConcurrentLoads(Math.max(1, maxConcurrentLoads - 1))}
+                    className="w-7 h-7 rounded-lg bg-[#1f1d18] hover:bg-[#2a2820] text-[#c8bfa8] text-sm transition-colors flex items-center justify-center"
+                  >−</button>
+                  <span className="w-6 text-center text-sm font-mono text-[#c8bfa8]">{maxConcurrentLoads}</span>
+                  <button
+                    onClick={() => setMaxConcurrentLoads(Math.min(8, maxConcurrentLoads + 1))}
+                    className="w-7 h-7 rounded-lg bg-[#1f1d18] hover:bg-[#2a2820] text-[#c8bfa8] text-sm transition-colors flex items-center justify-center"
+                  >+</button>
+                </div>
+              </div>
             </div>
 
             <div className="flex items-center gap-3 mb-5">

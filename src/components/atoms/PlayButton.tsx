@@ -10,6 +10,7 @@ export function PlayButton({ isPlaying, onClick }: PlayButtonProps) {
     <motion.button
       whileTap={{ scale: 0.92 }}
       onClick={onClick}
+      aria-label={isPlaying ? "Pause" : "Play"}
       className="w-9 h-9 rounded-full bg-[#f0ead8] flex items-center justify-center hover:bg-white transition-colors cursor-pointer"
     >
       {isPlaying ? (

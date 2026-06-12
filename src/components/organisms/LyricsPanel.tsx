@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePlayerStore } from "../../store/playerStore";
+import { useToastStore } from "../../store/toastStore";
 import { useLyrics, useSetLyrics } from "../../hooks/useLyrics";
 import { parseLrc } from "../../utils/lrcParser";
 import { useArtwork } from "../../hooks/useArtwork";
@@ -49,6 +50,7 @@ function parseLrcTime(str: string): number | null {
 export function LyricsPanel({ open: isOpen, onClose, progress, seek, isOnTop, onBringToFront }: LyricsPanelProps) {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const queryClient = useQueryClient();
+  const { show: showToast } = useToastStore();
   const { data, isLoading, isFetching, isError, refetch } = useLyrics(isOpen ? currentTrack : null);
   const { mutate: saveLyrics, isPending: isSaving } = useSetLyrics(currentTrack?.path);
   const { data: artworkUrl } = useArtwork(currentTrack?.path, false, true);
@@ -73,7 +75,7 @@ export function LyricsPanel({ open: isOpen, onClose, progress, seek, isOnTop, on
 
   async function handleRefresh() {
     if (refreshCooldown > 0 || isFetching || !currentTrack) return;
-    try { await invoke("clear_lyrics_cache", { trackPath: currentTrack.path }); } catch {}
+    try { await invoke("clear_lyrics_cache", { trackPath: currentTrack.path }); } catch { /* non-critical */ }
     queryClient.removeQueries({ queryKey: ["lyrics", currentTrack.path] });
     refetch();
     setRefreshCooldown(7);
@@ -137,7 +139,7 @@ export function LyricsPanel({ open: isOpen, onClose, progress, seek, isOnTop, on
       const content = await invoke<string>("read_text_file", { path: selected });
       setDraft(content);
     } catch (e) {
-      console.error("Failed to import file", e);
+      showToast("Failed to read lyrics file — " + String(e).slice(0, 60));
     }
   }
 
@@ -277,6 +279,8 @@ export function LyricsPanel({ open: isOpen, onClose, progress, seek, isOnTop, on
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "100%", opacity: 0 }}
             transition={{ type: "spring", stiffness: 400, damping: 40 }}
+            role="complementary"
+            aria-label="Lyrics"
             onMouseDown={onBringToFront}
             className={`fixed right-0 top-0 bottom-16 sm:bottom-20 w-full sm:w-80 bg-[#161410] border-l border-white/5 flex flex-col shadow-2xl ${isOnTop ? "z-[52]" : "z-[51]"}`}
           >
@@ -356,6 +360,7 @@ export function LyricsPanel({ open: isOpen, onClose, progress, seek, isOnTop, on
                 )}
                 <button
                   onClick={editing ? cancelEdit : lrcBuilding ? cancelLrcBuilder : onClose}
+                  aria-label={editing ? "Cancel edit" : lrcBuilding ? "Cancel LRC builder" : "Close lyrics"}
                   className="p-1 rounded-md text-[#3a3628] hover:text-[#7a7060] transition-colors"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
