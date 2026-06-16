@@ -16,14 +16,20 @@ interface NowPlayingViewProps {
   progress: number;
   duration: number;
   seek: (time: number) => void;
+  onPrevious?: () => void;
+  onNext?: () => void;
 }
 
-export function NowPlayingView({ open, onClose, progress, duration, seek }: NowPlayingViewProps) {
+export function NowPlayingView({ open, onClose, progress, duration, seek, onPrevious, onNext }: NowPlayingViewProps) {
   const {
     currentTrack, isPlaying, volume, isMuted, shuffle, repeat,
     setIsPlaying, setVolume, toggleMute, nextTrack, previousTrack,
     toggleShuffle, toggleRepeat,
   } = usePlayerStore();
+  // Smart previous (restart-if->3s) / next (restart-on-repeat-one) when provided
+  // by the audio hook; else fall back to the plain store actions.
+  const handlePrevious = onPrevious ?? previousTrack;
+  const handleNext = onNext ?? nextTrack;
   // Use original-resolution artwork (up to 1200px); fall back to the 300px "full" tier
   // while the original is still being extracted and cached on first open.
   useEffect(() => {
@@ -108,9 +114,9 @@ export function NowPlayingView({ open, onClose, progress, duration, seek }: NowP
               {/* Playback controls */}
               <div className="flex items-center justify-center gap-6 mb-6">
                 <ShuffleButton active={shuffle} onClick={toggleShuffle} />
-                <SkipButton direction="previous" onClick={previousTrack} />
+                <SkipButton direction="previous" onClick={handlePrevious} />
                 <PlayButton isPlaying={isPlaying} onClick={() => setIsPlaying(!isPlaying)} />
-                <SkipButton direction="next" onClick={nextTrack} />
+                <SkipButton direction="next" onClick={handleNext} />
                 <RepeatButton mode={repeat} onClick={toggleRepeat} />
               </div>
 

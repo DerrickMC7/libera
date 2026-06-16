@@ -186,8 +186,9 @@ export const usePlayerStore = create<PlayerState>()(
       set({ isPlaying: false });
       return;
     } else if (shuffle) {
-      // repeat === "all" + shuffle: reshuffle and loop
-      newShuffled = smartShuffle(queue, -1, []);
+      // repeat === "all" + shuffle: reshuffle and loop, keeping any remaining
+      // manually-queued tracks pinned at their positions.
+      newShuffled = smartShuffle(queue, -1, manualQueuePaths);
       nextIndex = 0;
     } else {
       // repeat === "all": loop to start

@@ -22,7 +22,7 @@ export interface GenreCooccurrence {
   shared: number;
 }
 
-export function useGenreCooccurrence(enabled = true, minShared = 2) {
+export function useGenreCooccurrence(enabled = true, minShared = 1) {
   return useQuery({
     queryKey: ["genre-cooccurrence", minShared],
     queryFn: () => invoke<GenreCooccurrence[]>("get_genre_cooccurrence", { minShared }),

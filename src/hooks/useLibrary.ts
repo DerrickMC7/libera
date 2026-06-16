@@ -41,16 +41,16 @@ export function useScanFolder() {
       const currentCount = await invoke<number>("get_tracks_count", { query: "" });
       const isFirstTime = currentCount === 0;
 
-      // Step 2: scan folder
-      const tracks = await invoke<Track[]>("scan_folder", { path: folderPath });
-
-      // Step 3: save to database
-      const saved = await invoke<number>("save_tracks", { tracks });
+      // Step 2+3: scan AND persist in a single backend call (avoids serializing
+      // the full track list across the IPC bridge twice for large libraries).
+      const { saved, paths } = await invoke<{ saved: number; paths: string[] }>(
+        "scan_and_save_folder",
+        { path: folderPath },
+      );
 
       // Step 4: find tracks without cached artwork
-      const allPaths = tracks.map((t) => t.path);
       const uncachedPaths = await invoke<string[]>("get_uncached_tracks", {
-        trackPaths: allPaths,
+        trackPaths: paths,
       });
 
       if (uncachedPaths.length > 0) {
@@ -79,11 +79,22 @@ export function useScanFolder() {
         });
       }
 
-      return { tracks, saved };
+      return { saved, paths };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tracks-page"] });
-      queryClient.invalidateQueries({ queryKey: ["tracks-count"] });
+      // A scan can add tracks, albums, artists and genres — refresh every view
+      // that derives from the tracks table, not just the tracks list itself.
+      [
+        "tracks-page",
+        "tracks-count",
+        "tracks-ordered",
+        "albums",
+        "artists",
+        "genres",
+        "genre-stats",
+        "genre-cooccurrence",
+        "library-stats",
+      ].forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
     },
     onError: (e: unknown) => {
       showToast("Scan failed — " + String(e).slice(0, 80));

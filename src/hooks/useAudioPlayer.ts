@@ -26,6 +26,16 @@ export function useAudioPlayer() {
   const activeSlot  = useRef<"A" | "B">("A");
   const crossfading = useRef(false);
   const xfadeTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Descriptor of the in-flight crossfade, so it can be frozen on pause and
+  // resumed exactly where it left off (both tracks + the gain ramps + the
+  // finalize timer) instead of being aborted.
+  const xfadeRef = useRef<{
+    fromGain: GainNode; toGain: GainNode;
+    fAudio: HTMLAudioElement; tAudio: HTMLAudioElement;
+    toSlot: "A" | "B";
+    finalizeAt: number; // ctx time the fade completes and we finalize
+    remaining: number;  // seconds of fade left (updated when paused)
+  } | null>(null);
 
   // Path currently loaded in the active audio slot.
   // The [currentTrack] effect skips the src update only when the crossfade
@@ -89,8 +99,8 @@ export function useAudioPlayer() {
       const store = usePlayerStore.getState();
       switch (e.key) {
         case "MediaPlayPause":     e.preventDefault(); store.setIsPlaying(!store.isPlaying); break;
-        case "MediaTrackNext":     e.preventDefault(); store.nextTrack();      break;
-        case "MediaTrackPrevious": e.preventDefault(); store.previousTrack();  break;
+        case "MediaTrackNext":     e.preventDefault(); next();      break;
+        case "MediaTrackPrevious": e.preventDefault(); previous();  break;
         case "MediaStop":          e.preventDefault(); store.setIsPlaying(false); break;
       }
     }
@@ -138,6 +148,66 @@ export function useAudioPlayer() {
       if (curGain)  { curGain.gain.cancelScheduledValues(ctx.currentTime);  curGain.gain.setValueAtTime(1, ctx.currentTime); }
       if (idleGain) { idleGain.gain.cancelScheduledValues(ctx.currentTime); idleGain.gain.setValueAtTime(0, ctx.currentTime); }
     }
+    xfadeRef.current = null;
+    // We settled back on the active (outgoing) slot, which still holds the
+    // current track — keep loadedPathRef in sync so it isn't left pointing at
+    // the discarded incoming track.
+    loadedPathRef.current = usePlayerStore.getState().currentTrack?.path ?? "";
+  }
+
+  // ─── Finalize a crossfade: switch to the incoming slot and advance the store ─
+  function finalizeCrossfade() {
+    xfadeTimer.current = null;
+    const x = xfadeRef.current;
+    if (!x) { crossfading.current = false; return; }
+    x.fAudio.pause(); x.fAudio.src = "";
+    const c = ctxRef.current;
+    if (c) { x.fromGain.gain.cancelScheduledValues(c.currentTime); x.fromGain.gain.setValueAtTime(1, c.currentTime); }
+    activeSlot.current = x.toSlot;
+    setDuration(x.tAudio.duration || 0);
+    crossfading.current = false;
+    xfadeRef.current = null;
+    usePlayerStore.getState().nextTrack();
+  }
+
+  // ─── Freeze an in-flight crossfade (pause) ───────────────────────────────────
+  // Hold both gains at their current interpolated values, pause both elements,
+  // and remember how much fade is left so resume can continue from here.
+  function pauseCrossfade() {
+    const x = xfadeRef.current;
+    const ctx = ctxRef.current;
+    if (!x || !ctx) return;
+    const curFrom = x.fromGain.gain.value;
+    const curTo   = x.toGain.gain.value;
+    x.fromGain.gain.cancelScheduledValues(ctx.currentTime);
+    x.fromGain.gain.setValueAtTime(curFrom, ctx.currentTime);
+    x.toGain.gain.cancelScheduledValues(ctx.currentTime);
+    x.toGain.gain.setValueAtTime(curTo, ctx.currentTime);
+    x.fAudio.pause();
+    x.tAudio.pause();
+    if (xfadeTimer.current !== null) { clearTimeout(xfadeTimer.current); xfadeTimer.current = null; }
+    x.remaining = Math.max(0, x.finalizeAt - ctx.currentTime);
+  }
+
+  // ─── Resume a frozen crossfade (play) ────────────────────────────────────────
+  function resumeCrossfade() {
+    const x = xfadeRef.current;
+    const ctx = ctxRef.current;
+    if (!x || !ctx) return;
+    const remaining = x.remaining;
+    ctx.resume().then(() => {
+      const now = ctx.currentTime;
+      x.fromGain.gain.cancelScheduledValues(now);
+      x.fromGain.gain.setValueAtTime(x.fromGain.gain.value, now);
+      x.fromGain.gain.linearRampToValueAtTime(0, now + remaining);
+      x.toGain.gain.cancelScheduledValues(now);
+      x.toGain.gain.setValueAtTime(x.toGain.gain.value, now);
+      x.toGain.gain.linearRampToValueAtTime(1, now + remaining);
+      x.finalizeAt = now + remaining;
+      x.fAudio.play().catch(() => {});
+      x.tAudio.play().catch(() => {});
+      xfadeTimer.current = setTimeout(finalizeCrossfade, remaining * 1000);
+    }).catch(() => {});
   }
 
   // ─── True crossfade: load next into idle slot, ramp gains on canplay ────────
@@ -157,8 +227,16 @@ export function useAudioPlayer() {
     const fAudio = fromSlot === "A" ? aA : aB;
 
     const store = usePlayerStore.getState();
-    const { queue, shuffledQueue, queueIndex, shuffle } = store;
+    const { queue, shuffledQueue, queueIndex, shuffle, repeat } = store;
     const activeQueue = shuffle ? shuffledQueue : queue;
+    // Respect repeat mode: "one" must let the `ended` handler restart the same
+    // track, and at the end of the queue with repeat "off" we must NOT crossfade
+    // into track 0 — playback should stop.
+    const atEnd = queueIndex + 1 >= activeQueue.length;
+    if (repeat === "one" || (atEnd && repeat === "off")) {
+      crossfading.current = false;
+      return;
+    }
     const nextIndex   = (queueIndex + 1) % activeQueue.length;
     const nextTrack   = activeQueue[nextIndex];
     if (!nextTrack) { crossfading.current = false; return; }
@@ -200,9 +278,16 @@ export function useAudioPlayer() {
       tGain.gain.setValueAtTime(0, now);
       tGain.gain.linearRampToValueAtTime(1, now + fadeDuration);
 
+      // Record the crossfade so pause/resume can freeze and continue it.
+      xfadeRef.current = {
+        fromGain: fGain, toGain: tGain, fAudio, tAudio, toSlot,
+        finalizeAt: now + fadeDuration, remaining: fadeDuration,
+      };
+
       c.resume().then(() =>
         tAudio.play().catch(() => {
           crossfading.current = false;
+          xfadeRef.current = null;
           if (xfadeTimer.current) { clearTimeout(xfadeTimer.current); xfadeTimer.current = null; }
           const c2 = ctxRef.current;
           if (c2) {
@@ -213,16 +298,7 @@ export function useAudioPlayer() {
         })
       );
 
-      xfadeTimer.current = setTimeout(() => {
-        xfadeTimer.current = null;
-        fAudio.pause(); fAudio.src = "";
-        const c2 = ctxRef.current;
-        if (c2) { fGain.gain.cancelScheduledValues(c2.currentTime); fGain.gain.setValueAtTime(1, c2.currentTime); }
-        activeSlot.current = toSlot;
-        setDuration(tAudio.duration || 0);
-        crossfading.current = false;
-        usePlayerStore.getState().nextTrack();
-      }, fadeDuration * 1000);
+      xfadeTimer.current = setTimeout(finalizeCrossfade, fadeDuration * 1000);
     }
 
     tAudio.addEventListener("canplay", onCanPlay, { once: true });
@@ -329,11 +405,11 @@ export function useAudioPlayer() {
 
   // ─── Play / pause ─────────────────────────────────────────────────────────
   useEffect(() => {
-    const audio = activeSlot.current === "A" ? audioARef.current : audioBRef.current;
-    if (!audio) return;
-
     if (!currentTrack) {
-      // Player closed — stop both slots and release file handles
+      // Player closed — stop everything and discard any in-flight crossfade.
+      if (xfadeTimer.current !== null) { clearTimeout(xfadeTimer.current); xfadeTimer.current = null; }
+      crossfading.current = false;
+      xfadeRef.current = null;
       audioARef.current?.pause(); if (audioARef.current) audioARef.current.src = "";
       audioBRef.current?.pause(); if (audioBRef.current) audioBRef.current.src = "";
       loadedPathRef.current = "";
@@ -342,9 +418,23 @@ export function useAudioPlayer() {
 
     if (isPlaying) {
       ensureGraph();
-      ctxRef.current?.resume().then(() => audio.play()).catch(console.error);
+      if (crossfading.current && xfadeRef.current) {
+        // Resume a frozen crossfade exactly where it left off (both tracks +
+        // gains + the remaining fade), rather than restarting either track.
+        resumeCrossfade();
+      } else {
+        const audio = activeSlot.current === "A" ? audioARef.current : audioBRef.current;
+        ctxRef.current?.resume().then(() => audio?.play()).catch(console.error);
+      }
     } else {
-      audio.pause();
+      if (crossfading.current && xfadeRef.current) {
+        // Freeze the crossfade in place — both tracks pause at their current
+        // positions and the gain mix is held, so resume continues seamlessly.
+        pauseCrossfade();
+      } else {
+        audioARef.current?.pause();
+        audioBRef.current?.pause();
+      }
     }
   }, [isPlaying, currentTrack]);
 
@@ -407,8 +497,8 @@ export function useAudioPlayer() {
     });
     navigator.mediaSession.setActionHandler("play",          () => usePlayerStore.getState().setIsPlaying(true));
     navigator.mediaSession.setActionHandler("pause",         () => usePlayerStore.getState().setIsPlaying(false));
-    navigator.mediaSession.setActionHandler("nexttrack",     () => usePlayerStore.getState().nextTrack());
-    navigator.mediaSession.setActionHandler("previoustrack", () => usePlayerStore.getState().previousTrack());
+    navigator.mediaSession.setActionHandler("nexttrack",     () => next());
+    navigator.mediaSession.setActionHandler("previoustrack", () => previous());
     navigator.mediaSession.setActionHandler("seekto",        (d) => { if (d.seekTime !== undefined) seek(d.seekTime); });
   }, [currentTrack]);
 
@@ -419,11 +509,50 @@ export function useAudioPlayer() {
 
   // ─── Seek ─────────────────────────────────────────────────────────────────
   function seek(time: number) {
+    // Seeking mid-crossfade is ambiguous — settle onto the current track first.
+    abortCrossfade();
     const audio = activeSlot.current === "A" ? audioARef.current : audioBRef.current;
     if (!audio) return;
     audio.currentTime = time;
     setProgress(time);
   }
 
-  return { progress, duration, seek, audioRef: audioARef, analyserRef };
+  // ─── Previous ───────────────────────────────────────────────────────────────
+  // Standard player behaviour: if we're more than 3s into the track, restart it;
+  // otherwise jump to the previous track.
+  function previous() {
+    // A crossfade may be running/frozen — settle onto the current track first so
+    // navigation is unambiguous.
+    abortCrossfade();
+    const audio = activeSlot.current === "A" ? audioARef.current : audioBRef.current;
+    if (audio && audio.currentTime > 3) {
+      audio.currentTime = 0;
+      setProgress(0);
+      if (usePlayerStore.getState().isPlaying) audio.play().catch(console.error);
+      return;
+    }
+    usePlayerStore.getState().previousTrack();
+  }
+
+  // ─── Next ─────────────────────────────────────────────────────────────────
+  // When repeat-one is on, a manual "next" restarts the current track from the
+  // start (the store can't do this on its own — it keeps the same path, so the
+  // audio element would just keep playing). Otherwise advance normally.
+  function next() {
+    // Settle any running/frozen crossfade onto the current track first, so we
+    // don't double-advance (the fade's finalize timer would also call nextTrack).
+    abortCrossfade();
+    if (usePlayerStore.getState().repeat === "one") {
+      const audio = activeSlot.current === "A" ? audioARef.current : audioBRef.current;
+      if (audio) {
+        audio.currentTime = 0;
+        setProgress(0);
+        if (usePlayerStore.getState().isPlaying) audio.play().catch(console.error);
+      }
+      return;
+    }
+    usePlayerStore.getState().nextTrack();
+  }
+
+  return { progress, duration, seek, previous, next, audioRef: audioARef, analyserRef };
 }

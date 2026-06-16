@@ -130,11 +130,12 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
       pageOrderRef.current = [];
       loadingRef.current.clear();
       activeLoadsRef.current = 0;
+      queryClient.invalidateQueries({ queryKey: ["tracks-ordered"] });
       forceUpdate();
     };
     window.addEventListener("library:track-updated", handler);
     return () => window.removeEventListener("library:track-updated", handler);
-  }, [forceUpdate]);
+  }, [forceUpdate, queryClient]);
 
   const { data: totalCount = 0 } = useTracksCount(debouncedSearch);
 
@@ -219,14 +220,31 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     loadVisiblePages();
   }, [tick]);
 
-  function handlePlay(index: number) {
-    const track = getTrack(index);
-    if (!track) return;
-    const allLoaded: Track[] = [];
-    Array.from(pagesRef.current.entries())
-      .sort(([a], [b]) => a - b)
-      .forEach(([, tracks]) => allLoaded.push(...tracks));
-    setQueue(allLoaded, allLoaded.indexOf(track));
+  async function handlePlay(index: number) {
+    const clicked = getTrack(index);
+    if (!clicked) return;
+    // Queue the WHOLE library in the current sort order — not just the pages
+    // currently cached in memory (which can be discontinuous after eviction).
+    try {
+      const all = await queryClient.fetchQuery({
+        queryKey: ["tracks-ordered", debouncedSearch, trackSortBy],
+        queryFn: () =>
+          invoke<Track[]>("get_tracks_ordered", {
+            query: debouncedSearch,
+            sortBy: trackSortBy,
+          }),
+        staleTime: 1000 * 60 * 5,
+      });
+      const startIdx = all.findIndex((t) => t.path === clicked.path);
+      setQueue(all, startIdx >= 0 ? startIdx : 0);
+    } catch {
+      // Fall back to the loaded pages if the ordered fetch fails
+      const allLoaded: Track[] = [];
+      Array.from(pagesRef.current.entries())
+        .sort(([a], [b]) => a - b)
+        .forEach(([, tracks]) => allLoaded.push(...tracks));
+      setQueue(allLoaded, allLoaded.indexOf(clicked));
+    }
     setIsPlaying(true);
   }
 
