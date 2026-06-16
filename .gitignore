@@ -23,5 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 
-# Local dev plan (not for version control)
+# Local dev files (not for version control)
 PLAN.md
+DEVELOPMENT_LOG.md

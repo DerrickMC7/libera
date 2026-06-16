@@ -1707,6 +1707,97 @@ fn set_artist_banner_from_base64(
 }
 
 #[tauri::command]
+fn is_artist_image_custom(app: tauri::AppHandle, artist_name: String) -> bool {
+    let Ok(cache_dir) = app.path().app_cache_dir() else { return false; };
+    cache_dir
+        .join("artist-images")
+        .join(format!("{}.custom", artist_name_hash(&artist_name)))
+        .exists()
+}
+
+#[tauri::command]
+fn set_artist_image_from_base64(
+    app: tauri::AppHandle,
+    artist_name: String,
+    image_base64: String,
+) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let image_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artist-images");
+    fs::create_dir_all(&image_dir).map_err(|e| e.to_string())?;
+
+    let hash = artist_name_hash(&artist_name);
+    let bytes = STANDARD.decode(&image_base64).map_err(|e| format!("base64 decode: {e}"))?;
+    fs::write(image_dir.join(format!("{}.jpg", hash)), &bytes).map_err(|e| e.to_string())?;
+    fs::write(image_dir.join(format!("{}.custom", hash)), b"").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_artist_image_custom(app: tauri::AppHandle, artist_name: String) -> Result<(), String> {
+    let Ok(image_dir) = app.path().app_cache_dir().map(|d| d.join("artist-images")) else {
+        return Ok(());
+    };
+    let hash = artist_name_hash(&artist_name);
+    let _ = fs::remove_file(image_dir.join(format!("{}.jpg", hash)));
+    let _ = fs::remove_file(image_dir.join(format!("{}.custom", hash)));
+    Ok(())
+}
+
+// ─── Genre images ──────────────────────────────────────────────────────────────
+// Genres are abstract groupings spanning many albums, so (like artist images) a
+// custom genre cover is stored on its own under `genre-images/` rather than
+// embedded into any audio file. `artist_name_hash` is a generic name→hash helper.
+
+#[tauri::command]
+fn get_genre_image(app: tauri::AppHandle, genre_name: String) -> Option<String> {
+    let path = app
+        .path()
+        .app_cache_dir()
+        .ok()?
+        .join("genre-images")
+        .join(format!("{}.jpg", artist_name_hash(&genre_name)));
+    if path.exists() { Some(path.to_string_lossy().to_string()) } else { None }
+}
+
+#[tauri::command]
+fn set_genre_image_from_base64(
+    app: tauri::AppHandle,
+    genre_name: String,
+    image_base64: String,
+) -> Result<(), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let image_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("genre-images");
+    fs::create_dir_all(&image_dir).map_err(|e| e.to_string())?;
+
+    let hash = artist_name_hash(&genre_name);
+    let bytes = STANDARD.decode(&image_base64).map_err(|e| format!("base64 decode: {e}"))?;
+    fs::write(image_dir.join(format!("{}.jpg", hash)), &bytes).map_err(|e| e.to_string())?;
+    fs::write(image_dir.join(format!("{}.custom", hash)), b"").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_genre_image_custom(app: tauri::AppHandle, genre_name: String) -> Result<(), String> {
+    let Ok(image_dir) = app.path().app_cache_dir().map(|d| d.join("genre-images")) else {
+        return Ok(());
+    };
+    let hash = artist_name_hash(&genre_name);
+    let _ = fs::remove_file(image_dir.join(format!("{}.jpg", hash)));
+    let _ = fs::remove_file(image_dir.join(format!("{}.custom", hash)));
+    Ok(())
+}
+
+#[tauri::command]
 async fn fetch_artist_images(
     app: tauri::AppHandle,
     state: tauri::State<'_, DbState>,
@@ -1906,6 +1997,94 @@ async fn fetch_artist_images(
     );
     let _ = app.emit("artist-images://done", serde_json::json!({ "total": total }));
     Ok(())
+}
+
+#[tauri::command]
+async fn fetch_single_artist_image(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+    artist_name: String,
+) -> Result<bool, String> {
+    use image::imageops::FilterType;
+
+    let artist_mbid: Option<String> = {
+        let conn = state.0.get().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT mbid FROM tracks WHERE album_artist = ?1 AND mbid IS NOT NULL
+             GROUP BY mbid ORDER BY COUNT(*) DESC LIMIT 1",
+            rusqlite::params![&artist_name],
+            |row| row.get(0),
+        ).ok()
+    };
+
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("artist-images");
+    fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+
+    let hash = artist_name_hash(&artist_name);
+    let thumb_path   = cache_dir.join(format!("{}.jpg",    &hash));
+    let custom_marker = cache_dir.join(format!("{}.custom", &hash));
+
+    let client = reqwest::Client::builder()
+        .user_agent("Libera/1.0 (music player app)")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let artist_json: Option<serde_json::Value> = async {
+        if let Some(mbid) = &artist_mbid {
+            let url = format!(
+                "https://www.theaudiodb.com/api/v1/json/2/artist-mb.php?i={}",
+                mbid
+            );
+            if let Ok(resp) = client.get(&url).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if json["artists"][0].is_object() {
+                        return Some(json);
+                    }
+                }
+            }
+        }
+        let search_url = format!(
+            "https://www.theaudiodb.com/api/v1/json/2/search.php?s={}",
+            urlencoding::encode(&artist_name)
+        );
+        let resp = client.get(&search_url).send().await.ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        let returned_name = json["artists"][0]["strArtist"].as_str()?;
+        if returned_name.to_lowercase() != artist_name.to_lowercase() {
+            return None;
+        }
+        Some(json)
+    }
+    .await;
+
+    let Some(json) = artist_json else { return Ok(false); };
+    let artist = &json["artists"][0];
+
+    if let Some(url) = artist["strArtistThumb"].as_str().filter(|s| !s.is_empty()) {
+        if let Ok(resp) = client.get(url).send().await {
+            if let Ok(bytes) = resp.bytes().await {
+                if let Ok(img) = image::load_from_memory(&bytes) {
+                    let img = img.resize_to_fill(600, 800, FilterType::Lanczos3);
+                    if let Ok(file) = fs::File::create(&thumb_path) {
+                        let mut buf = std::io::BufWriter::new(file);
+                        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 82);
+                        if enc.encode_image(&img).is_ok() {
+                            // Remove any custom marker — this is now an auto-fetched image
+                            let _ = fs::remove_file(&custom_marker);
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 #[tauri::command]
@@ -5419,7 +5598,14 @@ pub fn run() {
             set_artist_banner_custom,
             set_artist_banner_from_base64,
             clear_artist_banner_custom,
+            is_artist_image_custom,
+            set_artist_image_from_base64,
+            clear_artist_image_custom,
+            get_genre_image,
+            set_genre_image_from_base64,
+            clear_genre_image_custom,
             fetch_artist_images,
+            fetch_single_artist_image,
             pause_artist_image_download,
             resume_artist_image_download,
             cancel_artist_image_download,
