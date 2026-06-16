@@ -434,6 +434,30 @@ export function resolveGenreNode(name: string): string | null {
   return resolveGenreNodeDetailed(name)?.id ?? null;
 }
 
+/**
+ * Resolve a tag to ALL the nodes it belongs to. A compound tag ("Rock/Pop",
+ * "Jazz; Funk") lights up every segment's node so the track counts in each.
+ */
+export function resolveGenreNodesAll(name: string): { id: string; method: MatchMethod }[] {
+  const raw = name.trim();
+  if (!raw) return [];
+  // whole-string exact/alias first — never split "Drum & Bass"
+  const whole = NORM_INDEX.get(normalize(raw));
+  if (whole) return [{ id: whole, method: "exact" }];
+  const segments = raw.split(/[/;,|·]| - | x /i).map((s) => s.trim()).filter(Boolean);
+  if (segments.length > 1) {
+    const out: { id: string; method: MatchMethod }[] = [];
+    const seen = new Set<string>();
+    for (const seg of segments) {
+      const d = resolveGenreNodeDetailed(seg);
+      if (d && !seen.has(d.id)) { seen.add(d.id); out.push({ id: d.id, method: d.method }); }
+    }
+    if (out.length) return out;
+  }
+  const d = resolveGenreNodeDetailed(raw);
+  return d ? [{ id: d.id, method: d.method }] : [];
+}
+
 export function normalizeGenre(s: string): string {
   return normalize(s);
 }
@@ -449,7 +473,8 @@ export type TagMethod = MatchMethod | "alias";
 export interface TagInfo {
   tag: string;
   count: number;
-  nodeId: string | null;          // null = unmatched (goes to "Other")
+  nodeId: string | null;          // primary node (null = unmatched → "Other")
+  nodeIds: string[];              // all nodes this tag contributes to (multi-genre)
   method: TagMethod | null;
 }
 
@@ -467,20 +492,22 @@ export function matchUserGenres(
   const unmatched: { name: string; count: number }[] = [];
   const tags: TagInfo[] = [];
   for (const g of userGenres) {
-    let id: string | null = null;
-    let method: TagMethod | null = null;
     const ov = overrides?.get(normalize(g.name));
-    if (ov) { id = ov; method = "alias"; }
-    else { const d = resolveGenreNodeDetailed(g.name); if (d) { id = d.id; method = d.method; } }
+    const resolved: { id: string; method: TagMethod }[] = ov
+      ? [{ id: ov, method: "alias" }]
+      : resolveGenreNodesAll(g.name);
 
-    tags.push({ tag: g.name, count: g.track_count, nodeId: id, method });
-    if (!id) { if (g.name.trim()) unmatched.push({ name: g.name, count: g.track_count }); continue; }
+    const ids = resolved.map((r) => r.id);
+    tags.push({ tag: g.name, count: g.track_count, nodeId: ids[0] ?? null, nodeIds: ids, method: resolved[0]?.method ?? null });
+    if (resolved.length === 0) { if (g.name.trim()) unmatched.push({ name: g.name, count: g.track_count }); continue; }
 
-    const m = matches.get(id) ?? { count: 0, userGenres: [], fuzzy: true };
-    m.count += g.track_count;
-    if (!m.userGenres.includes(g.name)) m.userGenres.push(g.name);
-    if (method === "exact" || method === "segment" || method === "alias") m.fuzzy = false;
-    matches.set(id, m);
+    for (const r of resolved) {
+      const m = matches.get(r.id) ?? { count: 0, userGenres: [], fuzzy: true };
+      m.count += g.track_count;
+      if (!m.userGenres.includes(g.name)) m.userGenres.push(g.name);
+      if (r.method === "exact" || r.method === "segment" || r.method === "alias") m.fuzzy = false;
+      matches.set(r.id, m);
+    }
   }
   return { matches, unmatched, tags };
 }
