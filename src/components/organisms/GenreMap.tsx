@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useGenres } from "../../hooks/useGenres";
 import { usePlayerStore } from "../../store/playerStore";
-import { useGenreMapStore } from "../../store/genreMapStore";
+import { useGenreMapStore, GenreAlias } from "../../store/genreMapStore";
 import { Track } from "../../types/track";
 import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import {
@@ -11,6 +11,8 @@ import {
   TAXONOMY_LINKS,
   GENRE_FAMILIES,
   matchUserGenres,
+  normalizeGenre,
+  TagInfo,
 } from "../../data/genreTaxonomy";
 
 // ─── Simulation types ────────────────────────────────────────────────────────────
@@ -24,6 +26,8 @@ interface SimNode {
   mass: number;
   active: boolean;
   custom: boolean;
+  fuzzy: boolean;
+  reparented: boolean;
   count: number;
   userGenres: string[];
   x: number; y: number;
@@ -87,14 +91,22 @@ function linkWidthFactor(weight?: number): number {
 
 interface CustomNodeDef { id: string; label: string; family: string; }
 interface CustomLinkDef { id: string; source: string; target: string; label?: string; weight?: number; }
+interface AliasInput { norm: string; tag: string; nodeId: string; mode: "merge" | "move"; }
 
 function buildSim(
   userGenres: { name: string; track_count: number }[],
   customNodes: CustomNodeDef[],
   customLinks: CustomLinkDef[],
   prev: Map<string, { x: number; y: number }>,
+  aliases: AliasInput[],
 ): Sim {
-  const { matches, unmatched } = matchUserGenres(userGenres);
+  // "merge" aliases force a tag onto a node; "move" aliases keep the tag as its
+  // own node, so they're excluded from normal matching and built separately.
+  const mergeOverrides = new Map(aliases.filter((a) => a.mode !== "move").map((a) => [a.norm, a.nodeId]));
+  const reparents = aliases.filter((a) => a.mode === "move");
+  const reparentNorms = new Set(reparents.map((a) => a.norm));
+  const forMatch = userGenres.filter((g) => !reparentNorms.has(norm(g.name)));
+  const { matches, unmatched } = matchUserGenres(forMatch, mergeOverrides);
 
   const userByNorm = new Map<string, { count: number; name: string }>();
   for (const g of userGenres) {
@@ -110,7 +122,7 @@ function buildSim(
     return {
       id: n.id, label: n.label, family: n.family, color: n.color, depth: n.depth,
       mass: n.depth === 0 ? 2.2 : 1,
-      active: !!m, custom: false, count: m?.count ?? 0, userGenres: m?.userGenres ?? [],
+      active: !!m, custom: false, fuzzy: m?.fuzzy ?? false, reparented: false, count: m?.count ?? 0, userGenres: m?.userGenres ?? [],
       x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, fx: null, fy: null,
     };
   });
@@ -118,22 +130,43 @@ function buildSim(
   unmatched.forEach((u, i) => {
     nodes.push({
       id: `extra-${i}`, label: u.name, family: "other", color: OTHER_COLOR, depth: 1,
-      mass: 1, active: true, custom: false, count: u.count, userGenres: [u.name],
+      mass: 1, active: true, custom: false, fuzzy: false, reparented: false, count: u.count, userGenres: [u.name],
       x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, fx: null, fy: null,
     });
   });
 
   for (const c of customNodes) {
     const u = userByNorm.get(norm(c.label));
+    const m = matches.get(c.id); // tags the user aliased onto this custom node
+    const ug = new Set<string>();
+    if (u) ug.add(u.name);
+    if (m) for (const g of m.userGenres) ug.add(g);
     nodes.push({
       id: c.id, label: c.label, family: c.family, color: FAMILY_COLOR.get(c.family) ?? OTHER_COLOR,
-      depth: 1, mass: 1, active: true, custom: true,
+      depth: 1, mass: 1, active: true, custom: true, fuzzy: false, reparented: false,
+      count: (u?.count ?? 0) + (m?.count ?? 0), userGenres: [...ug],
+      x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, fx: null, fy: null,
+    });
+  }
+
+  // "move" aliases: the tag stays as its own node, linked to the chosen node.
+  for (const r of reparents) {
+    const u = userByNorm.get(r.norm);
+    nodes.push({
+      id: `reparent-${r.norm}`, label: r.tag, family: "other", color: OTHER_COLOR,
+      depth: 1, mass: 1, active: !!u, custom: false, fuzzy: false, reparented: true,
       count: u?.count ?? 0, userGenres: u ? [u.name] : [],
       x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, fx: null, fy: null,
     });
   }
 
   const byId = new Map(nodes.map((n) => [n.id, n]));
+  // colour reparent nodes by their parent's family (now that byId exists)
+  for (const r of reparents) {
+    const node = byId.get(`reparent-${r.norm}`);
+    const parent = byId.get(r.nodeId);
+    if (node && parent) { node.family = parent.family; node.color = parent.color; }
+  }
   const links: SimLink[] = [];
   for (const l of TAXONOMY_LINKS) {
     const s = byId.get(l.source), t = byId.get(l.target);
@@ -149,6 +182,11 @@ function buildSim(
   for (const l of customLinks) {
     const s = byId.get(l.source), t = byId.get(l.target);
     if (s && t) links.push({ source: s, target: t, kind: "cross", custom: true, linkId: l.id, label: l.label, weight: l.weight, rest: 180 });
+  }
+  for (const r of reparents) {
+    const s = byId.get(`reparent-${r.norm}`);
+    const t = byId.get(r.nodeId) ?? byId.get("other");
+    if (s && t) links.push({ source: s, target: t, kind: "cross", custom: true, rest: 120 });
   }
 
   const fams = GENRE_FAMILIES;
@@ -315,7 +353,7 @@ interface GenreMapProps { onBack: () => void; }
 export function GenreMap({ onBack }: GenreMapProps) {
   const { data: genres = [], isLoading } = useGenres("", true, "count");
   const hasTrack = usePlayerStore((s) => !!s.currentTrack);
-  const { customNodes, customLinks, addNode, removeNode, addLink, removeLink, updateLink } = useGenreMapStore();
+  const { customNodes, customLinks, aliases, addNode, removeNode, addLink, removeLink, updateLink, setAlias, removeAlias } = useGenreMapStore();
 
   const simRef = useRef<Sim | null>(null);
   const [, forceRender] = useReducer((c) => c + 1, 0);
@@ -336,6 +374,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
   const [constellation, setConstellation] = useState(false);
   const [isolatedFamily, setIsolatedFamily] = useState<string | null>(null);
   const [scale, setScale] = useState(1);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   const drag = useRef<{ mode: "none" | "node" | "pan"; node: SimNode | null; lastX: number; lastY: number; moved: number; }>(
     { mode: "none", node: null, lastX: 0, lastY: 0, moved: 0 },
@@ -348,14 +387,14 @@ export function GenreMap({ onBack }: GenreMapProps) {
     const firstBuild = !simRef.current;
     const sim = buildSim(
       genres.map((g) => ({ name: g.name, track_count: g.track_count })),
-      customNodes, customLinks, prevPos,
+      customNodes, customLinks, prevPos, aliases,
     );
     if (!firstBuild) sim.alpha = 0.6;
     simRef.current = sim;
     startLoop();
     return () => { if (sim.raf) cancelAnimationFrame(sim.raf); sim.running = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoading, genres, customNodes, customLinks]);
+  }, [isLoading, genres, customNodes, customLinks, aliases]);
 
   function startLoop() {
     const sim = simRef.current;
@@ -503,8 +542,44 @@ export function GenreMap({ onBack }: GenreMapProps) {
   const searchResults = useMemo(() => {
     if (!sim || search.trim().length < 1) return [];
     const q = search.toLowerCase();
-    return sim.nodes.filter((n) => n.label.toLowerCase().includes(q)).slice(0, 8);
+    return sim.nodes
+      .filter((n) => n.label.toLowerCase().includes(q) || n.userGenres.some((g) => g.toLowerCase().includes(q)))
+      .slice(0, 8);
   }, [sim, search]);
+
+  // ── Tag diagnostics (unmatched / fuzzy / casing duplicates) ──
+  const mergeOverrides = useMemo(() => new Map(aliases.filter((a) => a.mode !== "move").map((a) => [a.norm, a.nodeId])), [aliases]);
+  const reparentNormSet = useMemo(() => new Set(aliases.filter((a) => a.mode === "move").map((a) => a.norm)), [aliases]);
+  const idToLabel = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of TAXONOMY_NODES) m.set(n.id, n.label);
+    for (const c of customNodes) m.set(c.id, c.label);
+    return m;
+  }, [customNodes]);
+  const nodeOptions = useMemo(() => {
+    const opts = TAXONOMY_NODES.map((n) => ({ id: n.id, label: n.label, color: n.color }));
+    for (const c of customNodes) opts.push({ id: c.id, label: c.label, color: FAMILY_COLOR.get(c.family) ?? OTHER_COLOR });
+    return opts;
+  }, [customNodes]);
+  const diag = useMemo(() => {
+    const list = genres.map((g) => ({ name: g.name, track_count: g.track_count }));
+    const res = matchUserGenres(list, mergeOverrides);
+    const byNorm = new Map<string, { name: string; count: number }[]>();
+    for (const g of genres) {
+      const k = normalizeGenre(g.name);
+      if (!k) continue;
+      const arr = byNorm.get(k) ?? [];
+      arr.push({ name: g.name, count: g.track_count });
+      byNorm.set(k, arr);
+    }
+    const clusters = [...byNorm.values()]
+      .filter((v) => v.length > 1)
+      .sort((a, b) => b.reduce((s, x) => s + x.count, 0) - a.reduce((s, x) => s + x.count, 0));
+    const moved = (s: string) => reparentNormSet.has(normalizeGenre(s));
+    const unmatched = res.unmatched.filter((u) => !moved(u.name));
+    const fuzzy = res.tags.filter((t) => (t.method === "ngram" || t.method === "family") && !moved(t.tag));
+    return { tags: res.tags, unmatched, fuzzy, clusters };
+  }, [genres, mergeOverrides, reparentNormSet]);
 
   const selectedConnections = useMemo(() => {
     if (!sim || !selected) return [];
@@ -585,14 +660,19 @@ export function GenreMap({ onBack }: GenreMapProps) {
               className="w-full bg-[#1a1814] border border-white/8 rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-[#f0ead8] placeholder-[#5a5448] outline-none focus:border-[var(--accent)]"
             />
             {searchResults.length > 0 && (
-              <div className="absolute top-full mt-1 left-0 right-0 bg-[#161410] border border-white/10 rounded-lg shadow-2xl py-1 max-h-[240px] overflow-y-auto">
-                {searchResults.map((n) => (
-                  <button key={n.id} onClick={() => { centerOn(n); setSearch(""); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-white/5">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: n.active ? n.color : "#3a3628" }} />
-                    <span className="text-xs text-[#c8bfa8] truncate flex-1">{n.label}</span>
-                    {n.active && <span className="text-[9px] font-mono text-[#5a5448]">{n.count}</span>}
-                  </button>
-                ))}
+              <div className="absolute top-full mt-1 left-0 right-0 z-50 bg-[#161410] border border-white/10 rounded-lg shadow-2xl py-1 max-h-[240px] overflow-y-auto">
+                {searchResults.map((n) => {
+                  const ql = search.toLowerCase();
+                  const viaTag = n.label.toLowerCase().includes(ql) ? null : n.userGenres.find((g) => g.toLowerCase().includes(ql));
+                  return (
+                    <button key={n.id} onClick={() => { centerOn(n); setSearch(""); }} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-white/5">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: n.active ? n.color : "#3a3628" }} />
+                      <span className="text-xs text-[#c8bfa8] truncate" style={{ maxWidth: viaTag ? "55%" : undefined }}>{n.label}</span>
+                      {viaTag ? <span className="text-[9px] font-mono text-[#5a5448] truncate flex-1">← {viaTag}</span> : <span className="flex-1" />}
+                      {n.active && <span className="text-[9px] font-mono text-[#5a5448] shrink-0">{n.count}</span>}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -603,6 +683,14 @@ export function GenreMap({ onBack }: GenreMapProps) {
             <ToolBtn active={connectMode} onClick={() => { setAddOpen(false); setConnectMode((v) => !v); setConnectFromId(null); }} label="Connect" icon={<path d="M12 2a3 3 0 0 0-1 5.83V10H7a3 3 0 1 0 0 2h4v2.17a3 3 0 1 0 2 0V12h4a3 3 0 1 0 0-2h-4V7.83A3 3 0 0 0 12 2z" />} />
             <ToolBtn active={constellation} onClick={() => setConstellation((v) => !v)} label="Mine" icon={<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />} />
             <ToolBtn onClick={fitView} label="Fit" icon={<path d="M9 3H3v6h2V5h4V3zm12 0h-6v2h4v4h2V3zM5 15H3v6h6v-2H5v-4zm14 4h-4v2h6v-6h-2v4z" />} />
+            <button onClick={() => setDiagOpen(true)} title="Tag diagnostics"
+              className="relative flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-mono transition-colors border bg-[#1a1814] text-[#c8bfa8] border-white/8 hover:bg-[#2a2820]">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zm0 7.5L4.21 6 12 2.5 19.79 6 12 9.5zM2 17l10 5 10-5-2.1-1.05L12 19.6 4.1 15.95 2 17zm0-5l10 5 10-5-2.1-1.05L12 14.6 4.1 10.95 2 12z" /></svg>
+              Tags
+              {diag.unmatched.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[15px] h-[15px] px-1 rounded-full bg-[#c98a3b] text-[#0e0d0b] text-[8px] font-bold flex items-center justify-center">{diag.unmatched.length}</span>
+              )}
+            </button>
           </div>
 
           {/* Scale slider */}
@@ -679,7 +767,10 @@ export function GenreMap({ onBack }: GenreMapProps) {
                     <g key={n.id} transform={`translate(${n.x},${n.y})`} style={{ cursor: "pointer", opacity: op }}
                       onPointerDown={(e) => onNodePointerDown(e, n)} onPointerEnter={() => setHoveredId(n.id)} onPointerLeave={() => setHoveredId((h) => (h === n.id ? null : h))}>
                       {(isSel || isConnFrom) && <circle r={r + 4 / transform.k} fill="none" stroke="var(--accent)" strokeWidth={2 / transform.k} />}
-                      <circle r={r} fill={fill} stroke={n.custom ? "var(--accent)" : n.active ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)"} strokeWidth={(n.custom ? 1.4 : n.active ? 1 : 0.6) / transform.k} strokeDasharray={n.custom ? `${3 / transform.k} ${2 / transform.k}` : undefined} />
+                      <circle r={r} fill={fill} stroke={(n.custom || n.reparented) ? "var(--accent)" : n.active ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)"} strokeWidth={((n.custom || n.reparented) ? 1.4 : n.active ? 1 : 0.6) / transform.k} strokeDasharray={(n.custom || n.reparented) ? `${3 / transform.k} ${2 / transform.k}` : undefined} />
+                      {n.active && n.fuzzy && !n.custom && (
+                        <circle r={r + 3 / transform.k} fill="none" stroke="#d9a441" strokeOpacity={0.55} strokeWidth={0.9 / transform.k} strokeDasharray={`${2 / transform.k} ${2 / transform.k}`} />
+                      )}
                       {showLabel && (
                         <text y={r + (n.depth === 0 ? 15 : 11) / transform.k} textAnchor="middle" fontSize={(n.depth === 0 ? 13 : 9) / transform.k} fontFamily={n.depth === 0 ? "Fraunces, serif" : "ui-monospace, monospace"} fill={n.active ? "#f0ead8" : "#5a5448"} style={{ paintOrder: "stroke", stroke: "#0e0d0b", strokeWidth: 3 / transform.k, strokeLinejoin: "round", pointerEvents: "none", userSelect: "none" }}>{n.label}</text>
                       )}
@@ -731,9 +822,26 @@ export function GenreMap({ onBack }: GenreMapProps) {
           connections={selectedConnections}
           onClose={() => setSelectedId(null)}
           onRemoveNode={selected.custom ? () => { removeNode(selected.id); setSelectedId(null); } : undefined}
+          onResetReparent={selected.reparented ? () => { removeAlias(selected.id.replace(/^reparent-/, "")); setSelectedId(null); } : undefined}
           onRemoveLink={removeLink}
           onUpdateLink={updateLink}
           onConnectFrom={() => { setSelectedId(null); setConnectMode(true); setConnectFromId(selected.id); }}
+        />
+      )}
+
+      {diagOpen && (
+        <TagDiagnostics
+          tags={diag.tags}
+          unmatched={diag.unmatched}
+          fuzzy={diag.fuzzy}
+          clusters={diag.clusters}
+          aliases={aliases}
+          idToLabel={idToLabel}
+          nodeOptions={nodeOptions}
+          onAlias={setAlias}
+          onRemoveAlias={removeAlias}
+          onJump={(id) => { const n = sim?.byId.get(id); if (n) { centerOn(n); setDiagOpen(false); } }}
+          onClose={() => setDiagOpen(false)}
         />
       )}
     </div>,
@@ -757,12 +865,13 @@ function ToolBtn({ active, onClick, label, icon }: { active?: boolean; onClick: 
 // ─── Detail panel ────────────────────────────────────────────────────────────────
 
 function GenreDetailPanel({
-  node, connections, onClose, onRemoveNode, onRemoveLink, onUpdateLink, onConnectFrom,
+  node, connections, onClose, onRemoveNode, onResetReparent, onRemoveLink, onUpdateLink, onConnectFrom,
 }: {
   node: SimNode;
   connections: { linkId: string; label?: string; weight?: number; otherLabel: string; color: string }[];
   onClose: () => void;
   onRemoveNode?: () => void;
+  onResetReparent?: () => void;
   onRemoveLink: (id: string) => void;
   onUpdateLink: (id: string, patch: { label?: string; weight?: number }) => void;
   onConnectFrom: () => void;
@@ -816,10 +925,16 @@ function GenreDetailPanel({
           <div className="min-w-0">
             <div className="flex items-center gap-2 mb-1.5">
               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: node.active ? node.color : "#3a3628" }} />
-              <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#5a5448]">{node.custom ? "Custom genre" : "Genre"}</p>
+              <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#5a5448]">{node.reparented ? "Moved tag" : node.custom ? "Custom genre" : "Genre"}</p>
             </div>
             <h2 className="text-2xl text-[#faf8f2] font-light leading-tight" style={{ fontFamily: "Fraunces, serif" }}>{node.label}</h2>
             <p className="text-[11px] text-[#5a5448] font-mono mt-1.5">{hasMusic ? `${node.count} tracks in your library` : "Not in your library yet"}</p>
+            {node.active && node.fuzzy && (
+              <span className="inline-flex items-center gap-1.5 mt-1.5 text-[10px] font-mono text-[#d9a441]">
+                <span className="w-1.5 h-1.5 rounded-full border border-[#d9a441]" />
+                fuzzy match — guessed from your tag
+              </span>
+            )}
           </div>
           <button onClick={onClose} className="text-[#3a3628] hover:text-[#7a7060] transition-colors shrink-0">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
@@ -840,6 +955,11 @@ function GenreDetailPanel({
           <button onClick={onConnectFrom} className="flex items-center gap-1.5 text-xs font-mono px-3 py-2.5 rounded-full bg-[#1f1d18] text-[#c8bfa8] hover:bg-[#2a2820] transition-colors">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a3 3 0 0 0-1 5.83V10H7a3 3 0 1 0 0 2h4v2.17a3 3 0 1 0 2 0V12h4a3 3 0 1 0 0-2h-4V7.83A3 3 0 0 0 12 2z" /></svg>Connect
           </button>
+          {onResetReparent && (
+            <button onClick={onResetReparent} className="flex items-center gap-1.5 text-xs font-mono px-3 py-2.5 rounded-full bg-[#1f1d18] text-[#c8bfa8] hover:bg-[#2a2820] transition-colors">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" /></svg>Reset placement
+            </button>
+          )}
           {onRemoveNode && (
             <button onClick={onRemoveNode} className="flex items-center gap-1.5 text-xs font-mono px-3 py-2.5 rounded-full bg-[#1f1d18] text-[#c85858] hover:bg-[#c85858]/10 transition-colors">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13H5v-2h14v2z" /></svg>Remove
@@ -924,6 +1044,141 @@ function GenreDetailPanel({
           </>
         )}
         {hasMusic && !loading && tracks.length === 0 && (<p className="text-xs text-[#3a3628] px-2 py-6 text-center">No tracks found.</p>)}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tag diagnostics modal ───────────────────────────────────────────────────────
+
+function NodePicker({ label, options, onPick }: { label: string; options: { id: string; label: string; color: string }[]; onPick: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const results = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return (s ? options.filter((o) => o.label.toLowerCase().includes(s)) : options).slice(0, 14);
+  }, [q, options]);
+  if (!open) return <button onClick={() => setOpen(true)} className="text-[10px] font-mono px-2 py-1 rounded bg-[#2a2820] text-[#c8bfa8] hover:text-[var(--accent)] shrink-0">{label}</button>;
+  return (
+    <div className="relative shrink-0">
+      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onBlur={() => setTimeout(() => setOpen(false), 150)} placeholder="search…" className="w-28 bg-[#0e0d0b] border border-[var(--accent-a30)] rounded px-2 py-1 text-[10px] text-[#f0ead8] outline-none" />
+      <div className="absolute right-0 top-full mt-1 w-44 bg-[#0e0d0b] border border-white/10 rounded-lg shadow-2xl py-1 max-h-[200px] overflow-y-auto z-10">
+        {results.map((o) => (
+          <button key={o.id} onMouseDown={() => { onPick(o.id); setOpen(false); setQ(""); }} className="w-full flex items-center gap-2 px-2 py-1 hover:bg-white/5 text-left">
+            <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: o.color }} />
+            <span className="text-[10px] text-[#c8bfa8] truncate">{o.label}</span>
+          </button>
+        ))}
+        {results.length === 0 && <p className="text-[10px] text-[#3a3628] px-2 py-1">no match</p>}
+      </div>
+    </div>
+  );
+}
+
+function TagDiagnostics({
+  tags, unmatched, fuzzy, clusters, aliases, idToLabel, nodeOptions, onAlias, onRemoveAlias, onJump, onClose,
+}: {
+  tags: TagInfo[];
+  unmatched: { name: string; count: number }[];
+  fuzzy: TagInfo[];
+  clusters: { name: string; count: number }[][];
+  aliases: GenreAlias[];
+  idToLabel: Map<string, string>;
+  nodeOptions: { id: string; label: string; color: string }[];
+  onAlias: (tag: string, nodeId: string, mode: "merge" | "move") => void;
+  onRemoveAlias: (norm: string) => void;
+  onJump: (nodeId: string) => void;
+  onClose: () => void;
+}) {
+  const matched = tags.filter((t) => t.nodeId).length;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div onClick={(e) => e.stopPropagation()} className="relative z-10 w-[560px] max-w-full max-h-[82vh] flex flex-col bg-[#161410] border border-white/8 rounded-2xl shadow-2xl">
+        <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-white/6">
+          <div>
+            <h3 className="text-lg text-[#f0ead8]" style={{ fontFamily: "Fraunces, serif" }}>Tag Diagnostics</h3>
+            <p className="text-[11px] text-[#5a5448] font-mono mt-1">
+              {tags.length} tags · <span className="text-[#7faa6e]">{matched} matched</span>
+              {unmatched.length > 0 && <> · <span className="text-[#c98a3b]">{unmatched.length} unmatched</span></>}
+              {clusters.length > 0 && <> · <span className="text-[#b07cc6]">{clusters.length} casing dupes</span></>}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-[#3a3628] hover:text-[#7a7060]"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-5">
+          <p className="text-[10px] text-[#5a5448] leading-relaxed">
+            <span className="text-[#c8bfa8]">Merge</span> folds a tag's tracks into a genre (the tag stops being its own node).{" "}
+            <span className="text-[#c8bfa8]">Move</span> keeps the tag as its own node, just connected to that genre. Both are reversible here and never touch your files.
+          </p>
+          <section>
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[#c98a3b] mb-2">Unmatched · {unmatched.length}</p>
+            {unmatched.length === 0 ? (
+              <p className="text-[11px] text-[#5a5448]">Every tag found a home. 🎉</p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {unmatched.map((u) => (
+                  <div key={u.name} className="flex items-center gap-2 bg-[#1f1d18] rounded-lg px-2.5 py-1.5">
+                    <span className="text-[11px] text-[#f0ead8] truncate flex-1">{u.name}</span>
+                    <span className="text-[9px] font-mono text-[#5a5448]">{u.count}</span>
+                    <NodePicker label="Merge…" options={nodeOptions} onPick={(id) => onAlias(u.name, id, "merge")} />
+                    <NodePicker label="Move…" options={nodeOptions} onPick={(id) => onAlias(u.name, id, "move")} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {fuzzy.length > 0 && (
+            <section>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-[#d9a441] mb-2">Fuzzy / guessed · {fuzzy.length}</p>
+              <div className="flex flex-col gap-1.5">
+                {fuzzy.map((t) => (
+                  <div key={t.tag} className="flex items-center gap-2 bg-[#1f1d18] rounded-lg px-2.5 py-1.5">
+                    <span className="text-[11px] text-[#f0ead8] truncate max-w-[40%]">{t.tag}</span>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="text-[#3a3628] shrink-0"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg>
+                    <button onClick={() => t.nodeId && onJump(t.nodeId)} className="text-[11px] text-[#c8bfa8] hover:text-[var(--accent)] truncate flex-1 text-left">{t.nodeId ? idToLabel.get(t.nodeId) ?? t.nodeId : "?"}</button>
+                    <span className="text-[8px] font-mono text-[#5a5448] uppercase shrink-0">{t.method}</span>
+                    <NodePicker label="Merge…" options={nodeOptions} onPick={(id) => onAlias(t.tag, id, "merge")} />
+                    <NodePicker label="Move…" options={nodeOptions} onPick={(id) => onAlias(t.tag, id, "move")} />
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {clusters.length > 0 && (
+            <section>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-[#b07cc6] mb-1.5">Casing / spacing duplicates · {clusters.length}</p>
+              <p className="text-[10px] text-[#5a5448] mb-2 leading-relaxed">The map already merges these into one node; your library still lists them separately. (Phase 5 will add an opt-in "normalize tags in files".)</p>
+              <div className="flex flex-col gap-1.5">
+                {clusters.map((c, i) => (
+                  <div key={i} className="bg-[#1f1d18] rounded-lg px-2.5 py-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                    {c.map((v) => (<span key={v.name} className="text-[11px] text-[#c8bfa8]">"{v.name}" <span className="text-[#5a5448] font-mono text-[9px]">×{v.count}</span></span>))}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {aliases.length > 0 && (
+            <section>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--accent)] mb-2">Your reassignments · {aliases.length}</p>
+              <div className="flex flex-col gap-1.5">
+                {aliases.map((a) => (
+                  <div key={a.norm} className="flex items-center gap-2 bg-[#1f1d18] rounded-lg px-2.5 py-1.5">
+                    <span className="text-[11px] text-[#f0ead8] truncate max-w-[36%]">{a.tag}</span>
+                    <span className={`text-[8px] font-mono uppercase px-1.5 py-0.5 rounded shrink-0 ${a.mode === "move" ? "bg-[var(--accent-a12)] text-[var(--accent)]" : "bg-[#2a2820] text-[#7a7060]"}`}>{a.mode === "move" ? "move" : "merge"}</span>
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="text-[#3a3628] shrink-0"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" /></svg>
+                    <span className="text-[11px] text-[var(--accent)] truncate flex-1">{idToLabel.get(a.nodeId) ?? a.nodeId}</span>
+                    <button onClick={() => onRemoveAlias(a.norm)} title="Reverse" className="text-[#5a5448] hover:text-[#c85858] p-0.5"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg></button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
       </div>
     </div>
   );

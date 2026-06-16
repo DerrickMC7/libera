@@ -396,8 +396,10 @@ function matchByNgram(name: string): string | null {
   return null;
 }
 
-/** Resolve a single user genre string to a taxonomy node id, or null. */
-export function resolveGenreNode(name: string): string | null {
+export type MatchMethod = "exact" | "segment" | "ngram" | "family";
+
+/** Resolve a tag to a node id + the method used (for confidence display). */
+export function resolveGenreNodeDetailed(name: string): { id: string; method: MatchMethod } | null {
   const raw = name.trim();
   if (!raw) return null;
   const n = normalize(raw);
@@ -405,51 +407,80 @@ export function resolveGenreNode(name: string): string | null {
 
   // 1) exact label / alias match
   const exact = NORM_INDEX.get(n);
-  if (exact) return exact;
+  if (exact) return { id: exact, method: "exact" };
 
-  // 2) compound tags ("Rock/Pop", "Hip-Hop; Trap", "Funk - Soul"): try each segment whole
+  // 2) compound tags ("Rock/Pop", "Hip-Hop; Trap", "Funk - Soul"): each segment whole
   const segments = raw.split(/[/;,|·]| - | x /i).map((s) => s.trim()).filter(Boolean);
   if (segments.length > 1) {
     for (const seg of segments) {
       const id = NORM_INDEX.get(normalize(seg));
-      if (id) return id;
+      if (id) return { id, method: "segment" };
     }
   }
 
   // 3) word-n-gram against node labels/aliases (the big one)
   const ngram = matchByNgram(raw);
-  if (ngram) return ngram;
+  if (ngram) return { id: ngram, method: "ngram" };
 
   // 4) family-keyword fallback (longest keyword first)
   for (const fk of FAMILY_KEYWORDS) {
-    if (fk.norm && n.includes(fk.norm)) return fk.id;
+    if (fk.norm && n.includes(fk.norm)) return { id: fk.id, method: "family" };
   }
   return null;
+}
+
+/** Resolve a single user genre string to a taxonomy node id, or null. */
+export function resolveGenreNode(name: string): string | null {
+  return resolveGenreNodeDetailed(name)?.id ?? null;
+}
+
+export function normalizeGenre(s: string): string {
+  return normalize(s);
 }
 
 export interface GenreMatch {
   count: number;        // total tracks across matched user genres
   userGenres: string[]; // original user genre strings that mapped here
+  fuzzy: boolean;       // true only if every contributing tag was a guess (ngram/family)
+}
+
+export type TagMethod = MatchMethod | "alias";
+
+export interface TagInfo {
+  tag: string;
+  count: number;
+  nodeId: string | null;          // null = unmatched (goes to "Other")
+  method: TagMethod | null;
 }
 
 export interface MatchResult {
-  matches: Map<string, GenreMatch>;          // nodeId → match
+  matches: Map<string, GenreMatch>;             // nodeId → match
   unmatched: { name: string; count: number }[]; // user genres with no taxonomy home
+  tags: TagInfo[];                              // per-tag resolution detail (diagnostics)
 }
 
-export function matchUserGenres(userGenres: { name: string; track_count: number }[]): MatchResult {
+export function matchUserGenres(
+  userGenres: { name: string; track_count: number }[],
+  overrides?: Map<string, string>, // normalized tag → forced nodeId (user aliases)
+): MatchResult {
   const matches = new Map<string, GenreMatch>();
   const unmatched: { name: string; count: number }[] = [];
+  const tags: TagInfo[] = [];
   for (const g of userGenres) {
-    const id = resolveGenreNode(g.name);
-    if (!id) {
-      if (g.name.trim()) unmatched.push({ name: g.name, count: g.track_count });
-      continue;
-    }
-    const m = matches.get(id) ?? { count: 0, userGenres: [] };
+    let id: string | null = null;
+    let method: TagMethod | null = null;
+    const ov = overrides?.get(normalize(g.name));
+    if (ov) { id = ov; method = "alias"; }
+    else { const d = resolveGenreNodeDetailed(g.name); if (d) { id = d.id; method = d.method; } }
+
+    tags.push({ tag: g.name, count: g.track_count, nodeId: id, method });
+    if (!id) { if (g.name.trim()) unmatched.push({ name: g.name, count: g.track_count }); continue; }
+
+    const m = matches.get(id) ?? { count: 0, userGenres: [], fuzzy: true };
     m.count += g.track_count;
     if (!m.userGenres.includes(g.name)) m.userGenres.push(g.name);
+    if (method === "exact" || method === "segment" || method === "alias") m.fuzzy = false;
     matches.set(id, m);
   }
-  return { matches, unmatched };
+  return { matches, unmatched, tags };
 }
