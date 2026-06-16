@@ -388,20 +388,45 @@ fn populate_track_artists(conn: &rusqlite::Connection) -> SqlResult<()> {
     Ok(())
 }
 
-#[tauri::command]
-fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, String> {
-    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
-    let mut saved = 0;
-    for track in &tracks {
-        let result = conn.execute(
-            "INSERT OR IGNORE INTO tracks
+/// Extensions lofty can read. Kept in one place so the scan filters stay in sync.
+fn is_audio_file(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .as_deref(),
+        Some(
+            "mp3" | "flac" | "wav" | "aac" | "ogg" | "oga" | "m4a" | "m4b"
+            | "opus" | "aiff" | "aif" | "wma" | "alac" | "ape" | "wv"
+        )
+    )
+}
+
+/// Upsert tracks and keep track_artists in sync. Re-scanning an existing path
+/// now REFRESHES its metadata (ON CONFLICT DO UPDATE) instead of being ignored,
+/// so external tag edits propagate. Returns the number of rows touched.
+/// Must be called inside a transaction (pass a `&Transaction` — it derefs to Connection).
+fn upsert_tracks(conn: &rusqlite::Connection, tracks: &[Track]) -> Result<usize, String> {
+    let mut saved = 0usize;
+    for track in tracks {
+        let changed = conn.execute(
+            "INSERT INTO tracks
                 (path, title, artist, album, album_artist, genre, year,
                 track_number, track_total, disc_number, disc_total,
                 duration_secs, bitrate, sample_rate, channels, file_size, mbid,
                 replay_gain_track, replay_gain_album)
             VALUES
-                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+            ON CONFLICT(path) DO UPDATE SET
+                title=excluded.title, artist=excluded.artist, album=excluded.album,
+                album_artist=excluded.album_artist, genre=excluded.genre, year=excluded.year,
+                track_number=excluded.track_number, track_total=excluded.track_total,
+                disc_number=excluded.disc_number, disc_total=excluded.disc_total,
+                duration_secs=excluded.duration_secs, bitrate=excluded.bitrate,
+                sample_rate=excluded.sample_rate, channels=excluded.channels,
+                file_size=excluded.file_size, mbid=excluded.mbid,
+                replay_gain_track=excluded.replay_gain_track,
+                replay_gain_album=excluded.replay_gain_album",
             rusqlite::params![
                 track.path,
                 track.title,
@@ -423,55 +448,114 @@ fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, Strin
                 track.replay_gain_track,
                 track.replay_gain_album,
             ],
-        );
-        if result.is_ok() {
-            saved += 1;
-        }
-        // Keep track_artists in sync: insert one row per contributing artist
+        ).map_err(|e| e.to_string())?;
+        saved += changed;
+        // Re-sync track_artists for this path (the artist tag may have changed on rescan).
+        conn.execute(
+            "DELETE FROM track_artists WHERE track_path = ?1",
+            rusqlite::params![track.path],
+        ).map_err(|e| e.to_string())?;
         for artist_name in split_all_artists(&track.artist) {
-            let _ = conn.execute(
+            conn.execute(
                 "INSERT OR IGNORE INTO track_artists (track_path, artist_name) VALUES (?1, ?2)",
                 rusqlite::params![track.path, artist_name],
-            );
+            ).map_err(|e| e.to_string())?;
         }
     }
-    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
     Ok(saved)
 }
 
 #[tauri::command]
-fn get_tracks(state: State<DbState>) -> Result<Vec<Track>, String> {
+fn save_tracks(state: State<DbState>, tracks: Vec<Track>) -> Result<usize, String> {
+    let mut conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    // RAII transaction: rolls back automatically if anything below fails, so a
+    // pooled connection is never returned with a half-open transaction.
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let saved = upsert_tracks(&tx, &tracks)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(saved)
+}
+
+/// All tracks matching `query`, in the same order as get_tracks_page (same search +
+/// sort logic, no LIMIT/OFFSET). Used to build the full play queue when the user
+/// starts a track from the list, so "next/prev" walk the whole ordered library
+/// instead of only the pages currently cached in the UI.
+#[tauri::command]
+fn get_tracks_ordered(
+    state: State<DbState>,
+    query: String,
+    sort_by: Option<String>,
+) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-    let mut stmt = conn
-        .prepare("SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album FROM tracks")
-        .map_err(|e| format!("Query error: {}", e))?;
-    let tracks = stmt
-        .query_map([], |row| {
-            Ok(Track {
-                path: row.get(0)?,
-                title: row.get(1)?,
-                artist: row.get(2)?,
-                album: row.get(3)?,
-                album_artist: row.get(4)?,
-                genre: row.get(5)?,
-                year: row.get(6)?,
-                track_number: row.get(7)?,
-                track_total: row.get(8)?,
-                disc_number: row.get(9)?,
-                disc_total: row.get(10)?,
-                duration_secs: row.get(11)?,
-                bitrate: row.get(12)?,
-                sample_rate: row.get(13)?,
-                channels: row.get(14)?,
-                file_size: row.get(15)?,
-                mbid: row.get(16)?,
-                replay_gain_track: row.get(17)?,
-                replay_gain_album: row.get(18)?,
-            })
+    let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album FROM tracks";
+    let order_clause = match sort_by.as_deref() {
+        Some("title") => "ORDER BY LOWER(title)",
+        Some("album") => "ORDER BY album_artist, album",
+        Some("duration_asc") => "ORDER BY duration_secs ASC",
+        Some("duration_desc") => "ORDER BY duration_secs DESC",
+        Some("year") => "ORDER BY year DESC NULLS LAST, album_artist, album",
+        _ => "ORDER BY album_artist, album, disc_number, track_number",
+    };
+    let map_row = |row: &rusqlite::Row| {
+        Ok(Track {
+            path: row.get(0)?,
+            title: row.get(1)?,
+            artist: row.get(2)?,
+            album: row.get(3)?,
+            album_artist: row.get(4)?,
+            genre: row.get(5)?,
+            year: row.get(6)?,
+            track_number: row.get(7)?,
+            track_total: row.get(8)?,
+            disc_number: row.get(9)?,
+            disc_total: row.get(10)?,
+            duration_secs: row.get(11)?,
+            bitrate: row.get(12)?,
+            sample_rate: row.get(13)?,
+            channels: row.get(14)?,
+            file_size: row.get(15)?,
+            mbid: row.get(16)?,
+            replay_gain_track: row.get(17)?,
+            replay_gain_album: row.get(18)?,
         })
-        .map_err(|e| format!("Query error: {}", e))?
-        .filter_map(|t| t.ok())
-        .collect();
+    };
+    let tracks: Vec<Track> = if query.is_empty() {
+        let mut stmt = conn
+            .prepare(&format!("{} {}", sql_base, order_clause))
+            .map_err(|e| e.to_string())?;
+        let v = stmt
+            .query_map([], map_row)
+            .map_err(|e| e.to_string())?
+            .filter_map(|t| t.ok())
+            .collect();
+        v
+    } else {
+        let track_cols = &["LOWER(title)", "LOWER(artist)", "LOWER(album)"];
+        let (multi_cond, multi_params) = word_search_params(&query, 3, track_cols);
+        if !multi_cond.is_empty() {
+            let sql = format!("{} WHERE {} {}", sql_base, multi_cond, order_clause);
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let v = stmt
+                .query_map(rusqlite::params_from_iter(multi_params.iter()), map_row)
+                .map_err(|e| e.to_string())?
+                .filter_map(|t| t.ok())
+                .collect();
+            v
+        } else {
+            let pattern = format!("%{}%", query.to_lowercase());
+            let sql = format!(
+                "{} WHERE LOWER(title) LIKE ?1 OR LOWER(artist) LIKE ?1 OR LOWER(album) LIKE ?1 {}",
+                sql_base, order_clause
+            );
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let v = stmt
+                .query_map(rusqlite::params![pattern], map_row)
+                .map_err(|e| e.to_string())?
+                .filter_map(|t| t.ok())
+                .collect();
+            v
+        }
+    };
     Ok(tracks)
 }
 
@@ -841,37 +925,58 @@ fn get_library_stats(app: tauri::AppHandle, state: State<DbState>) -> Result<Lib
     })
 }
 
+/// Walk `folder`, read metadata from every supported audio file in parallel.
+fn scan_audio_files(folder: &std::path::Path) -> Result<Vec<Track>, String> {
+    let audio_files: Vec<PathBuf> = WalkDir::new(folder)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.path().to_path_buf())
+        .filter(|p| is_audio_file(p))
+        .collect();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(pool.install(|| {
+        audio_files
+            .par_iter()
+            .filter_map(|file_path| read_track_metadata(file_path))
+            .collect::<Vec<Track>>()
+    }))
+}
+
 #[tauri::command]
 fn scan_folder(path: String) -> Result<Vec<Track>, String> {
     let folder = PathBuf::from(&path);
     if !folder.exists() {
         return Err(format!("Folder not found: {}", path));
     }
-    let audio_files: Vec<PathBuf> = WalkDir::new(&folder)
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_file())
-        .filter_map(|entry| {
-            let path = entry.path().to_path_buf();
-            let ext = path.extension()?.to_str()?.to_lowercase();
-            if ext == "mp3" || ext == "flac" || ext == "wav" || ext == "aac" || ext == "ogg" {
-                Some(path)
-            } else {
-                None
-            }
-        })
-        .collect();
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
-        .build()
-        .map_err(|e| e.to_string())?;
-    let tracks = pool.install(|| {
-        audio_files
-            .par_iter()
-            .filter_map(|file_path| read_track_metadata(file_path))
-            .collect::<Vec<Track>>()
-    });
-    Ok(tracks)
+    scan_audio_files(&folder)
+}
+
+#[derive(Serialize)]
+pub struct ScanResult {
+    pub saved: usize,
+    pub paths: Vec<String>,
+}
+
+/// Scan a folder AND persist the tracks in one backend call, returning only the
+/// saved count and the list of scanned paths. Avoids serializing the full Track[]
+/// across the IPC bridge twice (scan → JS → save) for large libraries.
+#[tauri::command]
+fn scan_and_save_folder(state: State<DbState>, path: String) -> Result<ScanResult, String> {
+    let folder = PathBuf::from(&path);
+    if !folder.exists() {
+        return Err(format!("Folder not found: {}", path));
+    }
+    let tracks = scan_audio_files(&folder)?;
+    let paths: Vec<String> = tracks.iter().map(|t| t.path.clone()).collect();
+    let mut conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let saved = upsert_tracks(&tx, &tracks)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(ScanResult { saved, paths })
 }
 
 fn read_track_metadata(path: &PathBuf) -> Option<Track> {
@@ -2886,37 +2991,208 @@ pub struct GenreCooccurrence {
     pub shared: usize,
 }
 
-/// Pairs of genres that share album-artists in the user's library, with strength
-/// = number of shared artists. Drives the data-driven "affinity" overlay.
+/// "Various Artists"/unknown placeholders aren't real artists — they appear on
+/// compilations across many genres and would link everything to everything, so
+/// they're excluded from affinity.
+fn is_placeholder_artist(name: &str) -> bool {
+    matches!(
+        name.trim().to_lowercase().as_str(),
+        "" | "various artists"
+            | "various"
+            | "various artist"
+            | "va"
+            | "v.a."
+            | "v/a"
+            | "verschiedene"
+            | "varios"
+            | "varios artistas"
+            | "compilation"
+            | "soundtrack"
+            | "ost"
+            | "unknown artist"
+            | "unknown"
+            | "[unknown]"
+    )
+}
+
+/// Pairs of genres that co-occur across the same album-artists, with strength =
+/// number of artists that span both. Compound tags ("Rock / Pop") are split into
+/// their components so a single multi-genre artist links those components.
+/// Placeholder artists (Various Artists, etc.) are excluded. Drives the
+/// data-driven "affinity" overlay.
 #[tauri::command]
 fn get_genre_cooccurrence(
     state: State<DbState>,
     min_shared: Option<usize>,
 ) -> Result<Vec<GenreCooccurrence>, String> {
+    use std::collections::{HashMap, HashSet};
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
-    let min = min_shared.unwrap_or(2) as i64;
+    let min = min_shared.unwrap_or(1).max(1);
+
+    // artist → set of normalised genre components
+    let mut by_artist: HashMap<String, HashSet<String>> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT t.genre, ta.artist_name FROM track_artists ta JOIN tracks t ON t.path = ta.track_path")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for (genre, artist) in rows.flatten() {
+            if is_placeholder_artist(&artist) {
+                continue;
+            }
+            let set = by_artist.entry(artist).or_default();
+            for part in genre.split(|c| matches!(c, '/' | ';' | ',' | '|' | '·')) {
+                let p = part.trim().to_lowercase();
+                if !p.is_empty() && p != "unknown genre" {
+                    set.insert(p);
+                }
+            }
+        }
+    }
+
+    // count artists that span each unordered component pair
+    let mut pairs: HashMap<(String, String), usize> = HashMap::new();
+    for set in by_artist.values() {
+        if set.len() < 2 {
+            continue;
+        }
+        let mut v: Vec<&String> = set.iter().collect();
+        v.sort();
+        for i in 0..v.len() {
+            for j in (i + 1)..v.len() {
+                *pairs.entry((v[i].clone(), v[j].clone())).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut out: Vec<GenreCooccurrence> = pairs
+        .into_iter()
+        .filter(|(_, n)| *n >= min)
+        .map(|((a, b), shared)| GenreCooccurrence { a, b, shared })
+        .collect();
+    out.sort_by(|x, y| y.shared.cmp(&x.shared));
+    out.truncate(3000);
+    Ok(out)
+}
+
+/// The album-artists whose genres span both sides of an affinity link — i.e. who
+/// have a track in any of `comps_a` AND any of `comps_b` (genre components,
+/// lower-cased; compound tags are split the same way as get_genre_cooccurrence).
+#[tauri::command]
+fn get_genre_pair_artists(
+    state: State<DbState>,
+    comps_a: Vec<String>,
+    comps_b: Vec<String>,
+) -> Result<Vec<String>, String> {
+    use std::collections::{HashMap, HashSet};
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let a_set: HashSet<String> = comps_a.iter().map(|s| s.trim().to_lowercase()).collect();
+    let b_set: HashSet<String> = comps_b.iter().map(|s| s.trim().to_lowercase()).collect();
+    if a_set.is_empty() || b_set.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut by_artist: HashMap<String, HashSet<String>> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT t.genre, ta.artist_name FROM track_artists ta JOIN tracks t ON t.path = ta.track_path")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for (genre, artist) in rows.flatten() {
+            if is_placeholder_artist(&artist) {
+                continue;
+            }
+            let set = by_artist.entry(artist).or_default();
+            for part in genre.split(|c| matches!(c, '/' | ';' | ',' | '|' | '·')) {
+                let p = part.trim().to_lowercase();
+                if !p.is_empty() {
+                    set.insert(p);
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<String> = by_artist
+        .into_iter()
+        .filter(|(_, set)| {
+            set.intersection(&a_set).next().is_some() && set.intersection(&b_set).next().is_some()
+        })
+        .map(|(artist, _)| artist)
+        .collect();
+    out.sort_by_key(|s| s.to_lowercase());
+    Ok(out)
+}
+
+/// The tracks that put `artist_name` on both sides of an affinity link — i.e. the
+/// tracks where this artist appears (via track_artists, so features/collabs count)
+/// whose genre includes any component in `comps_a` OR `comps_b`. This is what the
+/// artist "participates with" in that link. Read-only.
+#[tauri::command]
+fn get_artist_link_tracks(
+    state: State<DbState>,
+    artist_name: String,
+    comps_a: Vec<String>,
+    comps_b: Vec<String>,
+) -> Result<Vec<Track>, String> {
+    use std::collections::HashSet;
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let union: HashSet<String> = comps_a
+        .iter()
+        .chain(comps_b.iter())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if union.is_empty() || artist_name.trim().is_empty() {
+        return Ok(vec![]);
+    }
     let mut stmt = conn
         .prepare(
-            "SELECT a.genre, b.genre, COUNT(DISTINCT a.album_artist) AS shared
-             FROM (SELECT DISTINCT genre, album_artist FROM tracks) a
-             JOIN (SELECT DISTINCT genre, album_artist FROM tracks) b
-               ON a.album_artist = b.album_artist AND a.genre < b.genre
-             GROUP BY a.genre, b.genre
-             HAVING shared >= ?1
-             ORDER BY shared DESC
-             LIMIT 3000",
+            "SELECT t.path, t.title, t.artist, t.album, t.album_artist, t.genre, t.year,
+             t.track_number, t.track_total, t.disc_number, t.disc_total,
+             t.duration_secs, t.bitrate, t.sample_rate, t.channels, t.file_size, t.mbid,
+             t.replay_gain_track, t.replay_gain_album
+             FROM tracks t JOIN track_artists ta ON ta.track_path = t.path
+             WHERE ta.artist_name = ?1
+             ORDER BY t.genre, t.album, t.track_number",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(rusqlite::params![min], |r| {
-            Ok(GenreCooccurrence {
-                a: r.get(0)?,
-                b: r.get(1)?,
-                shared: r.get::<_, i64>(2)? as usize,
+    let tracks = stmt
+        .query_map(rusqlite::params![artist_name], |row| {
+            Ok(Track {
+                path: row.get(0)?,
+                title: row.get(1)?,
+                artist: row.get(2)?,
+                album: row.get(3)?,
+                album_artist: row.get(4)?,
+                genre: row.get(5)?,
+                year: row.get(6)?,
+                track_number: row.get(7)?,
+                track_total: row.get(8)?,
+                disc_number: row.get(9)?,
+                disc_total: row.get(10)?,
+                duration_secs: row.get(11)?,
+                bitrate: row.get(12)?,
+                sample_rate: row.get(13)?,
+                channels: row.get(14)?,
+                file_size: row.get(15)?,
+                mbid: row.get(16)?,
+                replay_gain_track: row.get(17)?,
+                replay_gain_album: row.get(18)?,
             })
         })
-        .map_err(|e| e.to_string())?;
-    Ok(rows.filter_map(|x| x.ok()).collect())
+        .map_err(|e| e.to_string())?
+        .filter_map(|t| t.ok())
+        .filter(|t| {
+            t.genre
+                .split(|c| matches!(c, '/' | ';' | ',' | '|' | '·'))
+                .any(|p| union.contains(p.trim().to_lowercase().as_str()))
+        })
+        .collect();
+    Ok(tracks)
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -3089,44 +3365,44 @@ fn get_playlist_tracks(state: State<DbState>, playlist_id: i64) -> Result<Vec<Tr
 
 #[tauri::command]
 fn add_tracks_to_playlist(state: State<DbState>, playlist_id: i64, track_paths: Vec<String>) -> Result<(), String> {
-    let conn = state.0.get().map_err(|e| e.to_string())?;
+    let mut conn = state.0.get().map_err(|e| e.to_string())?;
     let max_pos: i64 = conn.query_row(
         "SELECT COALESCE(MAX(position), -1) FROM playlist_tracks WHERE playlist_id = ?1",
         rusqlite::params![playlist_id],
         |r| r.get(0),
     ).map_err(|e| e.to_string())?;
-    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
     let mut pos = max_pos + 1;
     for path in &track_paths {
-        let _ = conn.execute(
+        let _ = tx.execute(
             "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_path, position) VALUES (?1, ?2, ?3)",
             rusqlite::params![playlist_id, path, pos],
         );
         pos += 1;
     }
-    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 fn remove_from_playlist(state: State<DbState>, playlist_id: i64, track_path: String) -> Result<(), String> {
-    let conn = state.0.get().map_err(|e| e.to_string())?;
-    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
-    conn.execute(
+    let mut conn = state.0.get().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute(
         "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_path = ?2",
         rusqlite::params![playlist_id, track_path],
     ).map_err(|e| e.to_string())?;
-    conn.execute_batch(&format!(
+    tx.execute(
         "WITH ranked AS (
             SELECT track_path, (ROW_NUMBER() OVER (ORDER BY position)) - 1 AS new_pos
-            FROM playlist_tracks WHERE playlist_id = {id}
+            FROM playlist_tracks WHERE playlist_id = ?1
          )
          UPDATE playlist_tracks SET position = (
              SELECT new_pos FROM ranked WHERE ranked.track_path = playlist_tracks.track_path
-         ) WHERE playlist_id = {id}",
-        id = playlist_id
-    )).map_err(|e| e.to_string())?;
-    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+         ) WHERE playlist_id = ?1",
+        rusqlite::params![playlist_id],
+    ).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -3137,48 +3413,48 @@ fn reorder_playlist_track(
     track_path: String,
     new_position: i64,
 ) -> Result<(), String> {
-    let conn = state.0.get().map_err(|e| e.to_string())?;
+    let mut conn = state.0.get().map_err(|e| e.to_string())?;
     let current_pos: i64 = conn.query_row(
         "SELECT position FROM playlist_tracks WHERE playlist_id = ?1 AND track_path = ?2",
         rusqlite::params![playlist_id, &track_path],
         |r| r.get(0),
     ).map_err(|e| e.to_string())?;
     if current_pos == new_position { return Ok(()); }
-    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
-    conn.execute(
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute(
         "UPDATE playlist_tracks SET position = -1 WHERE playlist_id = ?1 AND track_path = ?2",
         rusqlite::params![playlist_id, &track_path],
     ).map_err(|e| e.to_string())?;
     if current_pos < new_position {
-        conn.execute(
+        tx.execute(
             "UPDATE playlist_tracks SET position = position - 1
              WHERE playlist_id = ?1 AND position > ?2 AND position <= ?3",
             rusqlite::params![playlist_id, current_pos, new_position],
         ).map_err(|e| e.to_string())?;
     } else {
-        conn.execute(
+        tx.execute(
             "UPDATE playlist_tracks SET position = position + 1
              WHERE playlist_id = ?1 AND position >= ?2 AND position < ?3",
             rusqlite::params![playlist_id, new_position, current_pos],
         ).map_err(|e| e.to_string())?;
     }
-    conn.execute(
+    tx.execute(
         "UPDATE playlist_tracks SET position = ?2 WHERE playlist_id = ?1 AND track_path = ?3",
         rusqlite::params![playlist_id, new_position, &track_path],
     ).map_err(|e| e.to_string())?;
-    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
 fn delete_playlist(state: State<DbState>, playlist_id: i64) -> Result<(), String> {
-    let conn = state.0.get().map_err(|e| e.to_string())?;
-    conn.execute_batch("BEGIN").map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?1", rusqlite::params![playlist_id])
+    let mut conn = state.0.get().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?1", rusqlite::params![playlist_id])
         .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM playlists WHERE id = ?1", rusqlite::params![playlist_id])
+    tx.execute("DELETE FROM playlists WHERE id = ?1", rusqlite::params![playlist_id])
         .map_err(|e| e.to_string())?;
-    conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -5691,7 +5967,7 @@ pub fn run() {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
         )
         .with_init(|conn| {
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")?;
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
             Ok(())
         });
     let pool = Pool::builder()
@@ -5712,8 +5988,9 @@ pub fn run() {
         .manage(MetadataFetchControl::new())
         .invoke_handler(tauri::generate_handler![
             scan_folder,
+            scan_and_save_folder,
             save_tracks,
-            get_tracks,
+            get_tracks_ordered,
             get_tracks_count,
             get_tracks_page,
             pick_folder,
@@ -5739,6 +6016,8 @@ pub fn run() {
             get_genre_tracks,
             get_genre_stats,
             get_genre_cooccurrence,
+            get_genre_pair_artists,
+            get_artist_link_tracks,
             rewrite_genre_tag,
             clear_music_library,
             clear_books_library,

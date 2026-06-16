@@ -29,10 +29,10 @@ function fmtKey(key: string) {
 }
 
 export function AudioPlayer() {
-  const { progress, duration, seek, analyserRef } = useAudioPlayer();
+  const { progress, duration, seek, previous, next, analyserRef } = useAudioPlayer();
   const {
     currentTrack, isPlaying, volume, isMuted, shuffle, repeat, manualQueuePaths,
-    setIsPlaying, setVolume, toggleMute, nextTrack, previousTrack,
+    setIsPlaying, setVolume, toggleMute,
     toggleShuffle, toggleRepeat, closePlayer,
   } = usePlayerStore();
   const { message: toastMessage, visible: toastVisible } = useToastStore();
@@ -136,6 +136,10 @@ export function AudioPlayer() {
   durationRef.current = duration;
   const seekRef = useRef(seek);
   seekRef.current = seek;
+  const previousRef = useRef(previous);
+  previousRef.current = previous;
+  const nextRef = useRef(next);
+  nextRef.current = next;
 
   const stateBCRef = useRef<BroadcastChannel | null>(null);
 
@@ -176,8 +180,8 @@ export function AudioPlayer() {
       const store = usePlayerStore.getState();
       if      (action === "request-state")                 broadcastState();
       else if (action === "toggle-play")                   store.setIsPlaying(!store.isPlaying);
-      else if (action === "next")                          store.nextTrack();
-      else if (action === "prev")                          store.previousTrack();
+      else if (action === "next")                          nextRef.current();
+      else if (action === "prev")                          previousRef.current();
       else if (action === "seek"   && value !== undefined) seekRef.current(value);
       else if (action === "volume" && value !== undefined) store.setVolume(value);
     };
@@ -276,9 +280,9 @@ export function AudioPlayer() {
 
           {/* Playback controls */}
           <div className="flex items-center shrink-0">
-            <SkipButton direction="previous" onClick={previousTrack} />
+            <SkipButton direction="previous" onClick={previous} />
             <PlayButton isPlaying={isPlaying} onClick={() => setIsPlaying(!isPlaying)} />
-            <SkipButton direction="next" onClick={nextTrack} />
+            <SkipButton direction="next" onClick={next} />
           </div>
         </div>
 
@@ -315,11 +319,11 @@ export function AudioPlayer() {
           <div className="flex flex-col items-center flex-1 gap-2">
             <div className="flex items-center gap-5">
               <ShuffleButton active={shuffle} onClick={toggleShuffle} />
-              <SkipButton direction="previous" onClick={previousTrack} />
+              <SkipButton direction="previous" onClick={previous} />
               <Tooltip label="Play / Pause" shortcut={fmtKey(keyBindings["play-pause"])} altShortcut={keyBindings2["play-pause"] ? fmtKey(keyBindings2["play-pause"]) : undefined}>
                 <PlayButton isPlaying={isPlaying} onClick={() => setIsPlaying(!isPlaying)} />
               </Tooltip>
-              <SkipButton direction="next" onClick={nextTrack} />
+              <SkipButton direction="next" onClick={next} />
               <RepeatButton mode={repeat} onClick={toggleRepeat} />
             </div>
             <ProgressBar progress={progress} duration={duration} onSeek={seek} />
@@ -453,6 +457,8 @@ export function AudioPlayer() {
         progress={progress}
         duration={duration}
         seek={seek}
+        onPrevious={previous}
+        onNext={next}
       />
 
       {/* Queue action toast */}

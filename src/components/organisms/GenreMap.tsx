@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useGenres } from "../../hooks/useGenres";
 import { useGenreStats, useGenreCooccurrence } from "../../hooks/useGenreStats";
 import { useArtwork } from "../../hooks/useArtwork";
+import { useArtistImage } from "../../hooks/useArtistImage";
 import { usePlayerStore } from "../../store/playerStore";
 import { useRecentlyPlayedStore } from "../../store/recentlyPlayedStore";
 import { useToastStore } from "../../store/toastStore";
@@ -475,6 +476,9 @@ export function GenreMap({ onBack }: GenreMapProps) {
   const [scale, setScale] = useState(1);
   const [sizeMetric, setSizeMetric] = useState<SizeMetric>("tracks");
   const [affinity, setAffinity] = useState(false);
+  const [affinityEdge, setAffinityEdge] = useState<{ a: SimNode; b: SimNode; strength: number; aComps: string[]; bComps: string[] } | null>(null);
+  const [affinityArtists, setAffinityArtists] = useState<string[]>([]);
+  const [affinityArtistsLoading, setAffinityArtistsLoading] = useState(false);
   const [regions, setRegions] = useState(false);
   const [recent, setRecent] = useState(false);
   const [diagOpen, setDiagOpen] = useState(false);
@@ -503,7 +507,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
   );
 
   // Data-driven affinity edges (only fetched when the overlay is on).
-  const { data: cooccur = [] } = useGenreCooccurrence(affinity);
+  const { data: cooccur = [] } = useGenreCooccurrence(affinity, 1);
 
   useEffect(() => {
     if (isLoading) return;
@@ -542,6 +546,19 @@ export function GenreMap({ onBack }: GenreMapProps) {
     })();
     return () => { cancelled = true; };
   }, [selection]);
+
+  // Shared artists behind a clicked affinity link.
+  useEffect(() => {
+    if (!affinityEdge) { setAffinityArtists([]); return; }
+    let cancelled = false; setAffinityArtistsLoading(true);
+    invoke<string[]>("get_genre_pair_artists", { compsA: affinityEdge.aComps, compsB: affinityEdge.bComps })
+      .then((a) => { if (!cancelled) { setAffinityArtists(a ?? []); setAffinityArtistsLoading(false); } })
+      .catch(() => { if (!cancelled) { setAffinityArtists([]); setAffinityArtistsLoading(false); } });
+    return () => { cancelled = true; };
+  }, [affinityEdge]);
+
+  // Drop the selected link when the overlay is turned off.
+  useEffect(() => { if (!affinity) setAffinityEdge(null); }, [affinity]);
 
   function startLoop() {
     const sim = simRef.current;
@@ -598,6 +615,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       if (addOpen) setAddOpen(false);
+      else if (affinityEdge) setAffinityEdge(null);
       else if (connectMode) { setConnectMode(false); setConnectFromId(null); }
       else if (pathMode) { setPathMode(false); setPathFromId(null); }
       else if (selectMode) setSelectMode(false);
@@ -609,7 +627,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [addOpen, connectMode, pathMode, selectMode, selection, pathIds, search, selectedId, onBack]);
+  }, [addOpen, affinityEdge, connectMode, pathMode, selectMode, selection, pathIds, search, selectedId, onBack]);
 
   function screenToWorld(px: number, py: number) {
     return { x: (px - transform.x) / transform.k, y: (py - transform.y) / transform.k };
@@ -802,18 +820,23 @@ export function GenreMap({ onBack }: GenreMapProps) {
 
   const affinityEdges = useMemo(() => {
     if (!sim || !affinity || cooccur.length === 0) return [];
-    const agg = new Map<string, { a: SimNode; b: SimNode; strength: number }>();
+    const agg = new Map<string, { a: SimNode; b: SimNode; strength: number; aComps: Set<string>; bComps: Set<string> }>();
     for (const c of cooccur) {
       const ai = resolveGenreNode(c.a), bi = resolveGenreNode(c.b);
       if (!ai || !bi || ai === bi) continue;
       const na = sim.byId.get(ai), nb = sim.byId.get(bi);
       if (!na || !nb) continue;
-      const key = ai < bi ? `${ai}|${bi}` : `${bi}|${ai}`;
-      const e = agg.get(key);
-      if (e) e.strength += c.shared;
-      else agg.set(key, { a: na, b: nb, strength: c.shared });
+      const aLow = ai < bi;
+      const key = aLow ? `${ai}|${bi}` : `${bi}|${ai}`;
+      let e = agg.get(key);
+      if (!e) { e = { a: aLow ? na : nb, b: aLow ? nb : na, strength: 0, aComps: new Set(), bComps: new Set() }; agg.set(key, e); }
+      e.strength += c.shared;
+      if (aLow) { e.aComps.add(c.a); e.bComps.add(c.b); } else { e.aComps.add(c.b); e.bComps.add(c.a); }
     }
-    return [...agg.values()].sort((x, y) => y.strength - x.strength).slice(0, 300);
+    return [...agg.values()]
+      .sort((x, y) => y.strength - x.strength)
+      .slice(0, 300)
+      .map((e) => ({ a: e.a, b: e.b, strength: e.strength, aComps: [...e.aComps], bComps: [...e.bComps] }));
   }, [sim, affinity, cooccur]);
   const affinityMax = affinityEdges.reduce((m, e) => Math.max(m, e.strength), 1);
 
@@ -983,6 +1006,58 @@ export function GenreMap({ onBack }: GenreMapProps) {
     setTransform((t) => ({ ...t, x: size.w / 2 - wx * t.k, y: size.h / 2 - wy * t.k }));
   }
 
+  // The active side panel (or null).
+  const sidePanel = affinity && affinityEdge ? (
+    <AffinityPanel
+      a={affinityEdge.a}
+      b={affinityEdge.b}
+      strength={affinityEdge.strength}
+      aComps={affinityEdge.aComps}
+      bComps={affinityEdge.bComps}
+      artists={affinityArtists}
+      loading={affinityArtistsLoading}
+      onClose={() => setAffinityEdge(null)}
+      onJump={jumpTo}
+    />
+  ) : selection.size > 0 ? (
+    <MultiSelectPanel
+      nodes={selectedNodes}
+      tracks={selectionTracks}
+      loading={selectionLoading}
+      onClose={() => setSelection(new Set())}
+      onRemove={(id) => setSelection((s) => { const n = new Set(s); n.delete(id); return n; })}
+      onJump={jumpTo}
+      onPlay={() => playSelection(false)}
+      onShuffle={() => playSelection(true)}
+      onQueue={queueSelection}
+      onPlaylist={playlistSelection}
+    />
+  ) : pathIds.length > 0 ? (
+    <PathPanel
+      nodes={pathNodes}
+      steps={pathSteps}
+      tail={pathTail}
+      onClose={() => { setPathIds([]); setPathSteps([]); setPathTail([]); }}
+      onJump={jumpTo}
+      onTransition={buildTransition}
+    />
+  ) : selected ? (
+    <GenreDetailPanel
+      key={selected.id}
+      node={selected}
+      connections={selectedConnections}
+      onClose={() => setSelectedId(null)}
+      onRemoveNode={selected.custom ? () => { removeNode(selected.id); setSelectedId(null); } : undefined}
+      onResetReparent={selected.reparented ? () => { removeAlias(selected.id.replace(/^reparent-/, "")); setSelectedId(null); } : undefined}
+      onRemoveLink={removeLink}
+      onUpdateLink={updateLink}
+      onConnectFrom={() => { setSelectedId(null); setConnectMode(true); setConnectFromId(selected.id); }}
+      neighbors={selectedNeighbors}
+      onJumpNode={(id) => { const n = sim?.byId.get(id); if (n) centerOn(n); }}
+      onUnpin={selected.pinned ? () => { removePin(selected.id); const n = sim?.byId.get(selected.id); if (n) { n.fx = null; n.fy = null; } reheat(0.3); } : undefined}
+    />
+  ) : null;
+
   return createPortal(
     <div className={`fixed top-0 right-0 left-0 sm:left-[52px] ${hasTrack ? "bottom-16 sm:bottom-20" : "bottom-0"} z-40 flex bg-[#0e0d0b]`}>
       <div className="relative flex-1 min-w-0">
@@ -1050,15 +1125,14 @@ export function GenreMap({ onBack }: GenreMapProps) {
             {pins.length > 0 && (
               <ToolBtn onClick={() => clearPins()} label="Reset" icon={<path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />} />
             )}
-            <button onClick={() => setDiagOpen(true)} title="Tag diagnostics"
-              className="relative flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-mono transition-colors border bg-[#1a1814] text-[#c8bfa8] border-white/8 hover:bg-[#2a2820]">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zm0 7.5L4.21 6 12 2.5 19.79 6 12 9.5zM2 17l10 5 10-5-2.1-1.05L12 19.6 4.1 15.95 2 17zm0-5l10 5 10-5-2.1-1.05L12 14.6 4.1 10.95 2 12z" /></svg>
-              Tags
+            <button onClick={() => setDiagOpen(true)} title="Tag diagnostics" aria-label="Tag diagnostics"
+              className="relative flex items-center justify-center w-[34px] h-[34px] rounded-lg transition-colors border bg-[#1a1814] text-[#c8bfa8] border-white/8 hover:bg-[#2a2820] shrink-0">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zm0 7.5L4.21 6 12 2.5 19.79 6 12 9.5zM2 17l10 5 10-5-2.1-1.05L12 19.6 4.1 15.95 2 17zm0-5l10 5 10-5-2.1-1.05L12 14.6 4.1 10.95 2 12z" /></svg>
               {diag.unmatched.length > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 min-w-[15px] h-[15px] px-1 rounded-full bg-[#c98a3b] text-[#0e0d0b] text-[8px] font-bold flex items-center justify-center">{diag.unmatched.length}</span>
               )}
             </button>
-            <ToolBtn onClick={() => setHelpOpen(true)} label="?" icon={<path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z" />} />
+            <ToolBtn onClick={() => setHelpOpen(true)} label="Help" icon={<path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z" />} />
           </div>
 
           {viewsOpen && (
@@ -1171,8 +1245,15 @@ export function GenreMap({ onBack }: GenreMapProps) {
                 {affinity && affinityEdges.map((e, i) => {
                   const w = (0.8 + (e.strength / affinityMax) * 3) / transform.k;
                   const op = 0.25 + (e.strength / affinityMax) * 0.5;
+                  const sel = affinityEdge && affinityEdge.a.id === e.a.id && affinityEdge.b.id === e.b.id;
                   const { cx, cy } = edgeCtrl(e.a.x, e.a.y, e.b.x, e.b.y);
-                  return <path key={`aff-${i}`} d={`M${e.a.x} ${e.a.y} Q${cx} ${cy} ${e.b.x} ${e.b.y}`} fill="none" stroke="#4bb3a2" strokeOpacity={op} strokeWidth={w} strokeLinecap="round" />;
+                  const d = `M${e.a.x} ${e.a.y} Q${cx} ${cy} ${e.b.x} ${e.b.y}`;
+                  return (
+                    <g key={`aff-${i}`}>
+                      <path d={d} fill="none" stroke="#4bb3a2" strokeOpacity={sel ? 0.95 : op} strokeWidth={(sel ? w + 1.6 / transform.k : w)} strokeLinecap="round" />
+                      <path d={d} fill="none" stroke="transparent" strokeWidth={11 / transform.k} style={{ cursor: "pointer" }} onPointerDown={(ev) => ev.stopPropagation()} onClick={(ev) => { ev.stopPropagation(); setAffinityEdge(e); }} />
+                    </g>
+                  );
                 })}
 
                 {pathIds.length > 1 && pathIds.slice(0, -1).map((id, i) => {
@@ -1255,44 +1336,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
         </div>
       </div>
 
-      {selection.size > 0 ? (
-        <MultiSelectPanel
-          nodes={selectedNodes}
-          tracks={selectionTracks}
-          loading={selectionLoading}
-          onClose={() => setSelection(new Set())}
-          onRemove={(id) => setSelection((s) => { const n = new Set(s); n.delete(id); return n; })}
-          onJump={jumpTo}
-          onPlay={() => playSelection(false)}
-          onShuffle={() => playSelection(true)}
-          onQueue={queueSelection}
-          onPlaylist={playlistSelection}
-        />
-      ) : pathIds.length > 0 ? (
-        <PathPanel
-          nodes={pathNodes}
-          steps={pathSteps}
-          tail={pathTail}
-          onClose={() => { setPathIds([]); setPathSteps([]); setPathTail([]); }}
-          onJump={jumpTo}
-          onTransition={buildTransition}
-        />
-      ) : selected ? (
-        <GenreDetailPanel
-          key={selected.id}
-          node={selected}
-          connections={selectedConnections}
-          onClose={() => setSelectedId(null)}
-          onRemoveNode={selected.custom ? () => { removeNode(selected.id); setSelectedId(null); } : undefined}
-          onResetReparent={selected.reparented ? () => { removeAlias(selected.id.replace(/^reparent-/, "")); setSelectedId(null); } : undefined}
-          onRemoveLink={removeLink}
-          onUpdateLink={updateLink}
-          onConnectFrom={() => { setSelectedId(null); setConnectMode(true); setConnectFromId(selected.id); }}
-          neighbors={selectedNeighbors}
-          onJumpNode={(id) => { const n = sim?.byId.get(id); if (n) centerOn(n); }}
-          onUnpin={selected.pinned ? () => { removePin(selected.id); const n = sim?.byId.get(selected.id); if (n) { n.fx = null; n.fy = null; } reheat(0.3); } : undefined}
-        />
-      ) : null}
+      {sidePanel}
 
       {diagOpen && (
         <TagDiagnostics
@@ -1322,10 +1366,9 @@ function forceRenderTick(sim: Sim | null) { return sim ? sim.alpha : 0; }
 
 function ToolBtn({ active, onClick, label, icon }: { active?: boolean; onClick: () => void; label: string; icon: React.ReactNode }) {
   return (
-    <button onClick={onClick} title={label}
-      className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-mono transition-colors border ${active ? "bg-[var(--accent-a12)] text-[var(--accent)] border-[var(--accent-a30)]" : "bg-[#1a1814] text-[#c8bfa8] border-white/8 hover:bg-[#2a2820]"}`}>
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">{icon}</svg>
-      {label}
+    <button onClick={onClick} title={label} aria-label={label}
+      className={`flex items-center justify-center w-[34px] h-[34px] rounded-lg transition-colors border shrink-0 ${active ? "bg-[var(--accent-a12)] text-[var(--accent)] border-[var(--accent-a30)]" : "bg-[#1a1814] text-[#c8bfa8] border-white/8 hover:bg-[#2a2820]"}`}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">{icon}</svg>
     </button>
   );
 }
@@ -1691,6 +1734,134 @@ function TagDiagnostics({
             </section>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Affinity link panel ─────────────────────────────────────────────────────────
+
+// Avatar showing the artist's image when one is set, falling back to a person icon.
+function ArtistAvatar({ name }: { name: string }) {
+  const { data: url } = useArtistImage(name);
+  return (
+    <span className="w-8 h-8 rounded-full bg-[#1f1d18] overflow-hidden flex items-center justify-center shrink-0">
+      {url ? (
+        <img src={url} alt="" className="w-full h-full object-cover" />
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="text-[#5a5448]"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" /></svg>
+      )}
+    </span>
+  );
+}
+
+// One shared artist: avatar + name, expands to the tracks that put them on this link.
+function AffinityArtistRow({
+  name, aComps, bComps,
+}: {
+  name: string;
+  aComps: string[];
+  bComps: string[];
+}) {
+  const { currentTrack, setQueue, setIsPlaying } = usePlayerStore();
+  const [open, setOpen] = useState(false);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [tracksLoading, setTracksLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || tracks.length > 0) return;
+    let cancelled = false; setTracksLoading(true);
+    invoke<Track[]>("get_artist_link_tracks", { artistName: name, compsA: aComps, compsB: bComps })
+      .then((t) => { if (!cancelled) { setTracks(t ?? []); setTracksLoading(false); } })
+      .catch(() => { if (!cancelled) { setTracks([]); setTracksLoading(false); } });
+    return () => { cancelled = true; };
+  }, [open, name, aComps, bComps, tracks.length]);
+
+  return (
+    <div className="border-b border-white/4 last:border-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2.5 px-2 py-2 text-left hover:bg-[#15130f] transition-colors rounded"
+      >
+        <ArtistAvatar name={name} />
+        <span className="flex-1 text-xs text-[#c8bfa8] truncate">{name}</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className={`text-[#5a5448] shrink-0 transition-transform ${open ? "rotate-90" : ""}`}><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" /></svg>
+      </button>
+      {open && (
+        <div className="pb-1.5">
+          {tracksLoading && (
+            <div className="flex flex-col gap-1 px-2 pl-11 py-1">{Array.from({ length: 3 }).map((_, i) => (<div key={i} className="h-6 rounded bg-[#1a1814] animate-pulse" style={{ opacity: 1 - i * 0.2 }} />))}</div>
+          )}
+          {!tracksLoading && tracks.map((t, idx) => (
+            <button
+              key={t.path}
+              onClick={() => { setQueue(tracks, idx); setIsPlaying(true); }}
+              className={`w-full flex items-center gap-2 pl-11 pr-2 py-1.5 text-left hover:bg-[#15130f] transition-colors ${currentTrack?.path === t.path ? "bg-[#15130f]" : ""}`}
+            >
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" className={currentTrack?.path === t.path ? "text-[var(--accent)] shrink-0" : "text-[#5a5448] shrink-0"}><path d="M8 5v14l11-7z" /></svg>
+              <span className="flex-1 min-w-0">
+                <span className={`block text-[11px] truncate ${currentTrack?.path === t.path ? "text-[var(--accent)]" : "text-[#c8bfa8]"}`}>{t.title}</span>
+                <span className="block text-[9px] text-[#5a5448] font-mono truncate">{t.album}</span>
+              </span>
+              <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-[#1f1d18] text-[#8a8068] shrink-0 max-w-[100px] truncate">{t.genre}</span>
+            </button>
+          ))}
+          {!tracksLoading && tracks.length === 0 && <p className="text-[10px] text-[#3a3628] pl-11 py-1.5">No tracks found.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AffinityPanel({
+  a, b, strength, aComps, bComps, artists, loading, onClose, onJump,
+}: {
+  a: SimNode;
+  b: SimNode;
+  strength: number;
+  aComps: string[];
+  bComps: string[];
+  artists: string[];
+  loading: boolean;
+  onClose: () => void;
+  onJump: (id: string) => void;
+}) {
+  return (
+    <div className="w-[340px] sm:w-[400px] shrink-0 h-full border-l border-white/6 bg-[#0e0d0b] flex flex-col">
+      <div className="px-5 pt-5 pb-4 border-b border-white/6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="font-mono text-[9px] tracking-[0.18em] uppercase text-[#4bb3a2] mb-1.5">Affinity link</p>
+            <h2 className="text-xl text-[#faf8f2] font-light leading-tight" style={{ fontFamily: "Fraunces, serif" }}>
+              <button onClick={() => onJump(a.id)} className="hover:text-[var(--accent)] transition-colors">{a.label}</button>
+              <span className="text-[#4bb3a2] mx-1">⟷</span>
+              <button onClick={() => onJump(b.id)} className="hover:text-[var(--accent)] transition-colors">{b.label}</button>
+            </h2>
+            <p className="text-[11px] text-[#5a5448] font-mono mt-1.5">
+              {loading ? "Loading…" : `${artists.length} shared artist${artists.length === 1 ? "" : "s"}`} · strength {strength}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-[#3a3628] hover:text-[#7a7060] transition-colors shrink-0">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>
+          </button>
+        </div>
+        <p className="text-[10px] text-[#5a5448] mt-3 leading-relaxed">
+          Artists in your library whose music spans both <span className="text-[#c8bfa8]">{a.label}</span> and <span className="text-[#c8bfa8]">{b.label}</span> — they're why these genres are linked. Tap an artist to see the tracks involved.
+        </p>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-3 py-3">
+        {loading && (
+          <div className="flex flex-col gap-1">{Array.from({ length: 6 }).map((_, i) => (<div key={i} className="h-9 rounded bg-[#1a1814] animate-pulse" style={{ opacity: 1 - i * 0.12 }} />))}</div>
+        )}
+        {!loading && artists.length > 0 && (
+          <div className="flex flex-col">
+            {artists.map((name) => (
+              <AffinityArtistRow key={name} name={name} aComps={aComps} bComps={bComps} />
+            ))}
+          </div>
+        )}
+        {!loading && artists.length === 0 && <p className="text-xs text-[#3a3628] px-2 py-6 text-center">No shared artists found.</p>}
       </div>
     </div>
   );
