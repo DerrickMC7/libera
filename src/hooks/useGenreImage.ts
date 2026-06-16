@@ -1,18 +1,18 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useQuery } from "@tanstack/react-query";
 
-export function useArtistImage(artistName: string | undefined) {
+export function useGenreImage(genreName: string | undefined) {
   return useQuery({
-    queryKey: ["artist-image", artistName],
+    queryKey: ["genre-image", genreName],
     queryFn: async () => {
-      if (!artistName) return null;
-      const cachePath = await invoke<string | null>("get_artist_image", { artistName });
+      if (!genreName) return null;
+      const cachePath = await invoke<string | null>("get_genre_image", { genreName });
       if (!cachePath) return null;
       // Append timestamp so the browser doesn't serve a stale cached version
       // after the file is updated on disk (same path, new content).
       return convertFileSrc(cachePath) + `?v=${Date.now()}`;
     },
-    enabled: !!artistName,
+    enabled: !!genreName,
     staleTime: Infinity,
     gcTime: 1000 * 60 * 30,
   });

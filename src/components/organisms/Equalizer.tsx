@@ -20,13 +20,16 @@ function SpectrumAnalyser({ analyserRef, enabled }: { analyserRef: React.RefObje
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // Non-null re-bindings so TypeScript keeps the narrowing inside closures
+    const cvs: HTMLCanvasElement = canvas;
+    const c2d: CanvasRenderingContext2D = ctx;
 
     // Keep canvas internal resolution in sync with its CSS width so bar
     // positions are calculated in real pixels (no scaling distortion).
-    const syncWidth = () => { canvas.width = canvas.offsetWidth; };
+    const syncWidth = () => { cvs.width = cvs.offsetWidth; };
     syncWidth();
     const ro = new ResizeObserver(syncWidth);
-    ro.observe(canvas);
+    ro.observe(cvs);
 
     const fftSize = 512;
     const dataArray = new Uint8Array(fftSize / 2);
@@ -40,16 +43,16 @@ function SpectrumAnalyser({ analyserRef, enabled }: { analyserRef: React.RefObje
     function draw() {
       rafRef.current = requestAnimationFrame(draw);
       const analyser = analyserRef.current;
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.clearRect(0, 0, w, h);
+      const w = cvs.width;
+      const h = cvs.height;
+      c2d.clearRect(0, 0, w, h);
 
       const barW = (w - 9 * GAP) / 10;
 
       if (!analyser || !enabled) {
-        ctx.fillStyle = "rgba(42,40,32,0.5)";
+        c2d.fillStyle = "rgba(42,40,32,0.5)";
         for (let i = 0; i < 10; i++) {
-          ctx.fillRect(Math.round(i * (barW + GAP)), h - 2, Math.round(barW), 2);
+          c2d.fillRect(Math.round(i * (barW + GAP)), h - 2, Math.round(barW), 2);
         }
         return;
       }
@@ -70,11 +73,12 @@ function SpectrumAnalyser({ analyserRef, enabled }: { analyserRef: React.RefObje
         const x = Math.round(i * (barW + GAP));
         const bw = Math.round(barW);
 
-        const grad = ctx.createLinearGradient(0, h - barH, 0, h);
-        grad.addColorStop(0, "rgba(212,135,42,0.9)");
-        grad.addColorStop(1, "rgba(212,135,42,0.2)");
-        ctx.fillStyle = grad;
-        ctx.fillRect(x, h - barH, bw, barH);
+        const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d4872a';
+        const grad = c2d.createLinearGradient(0, h - barH, 0, h);
+        grad.addColorStop(0, accent + 'e6'); // 90% opacity
+        grad.addColorStop(1, accent + '33'); // 20% opacity
+        c2d.fillStyle = grad;
+        c2d.fillRect(x, h - barH, bw, barH);
       });
     }
 
