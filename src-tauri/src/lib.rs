@@ -923,8 +923,19 @@ fn read_track_metadata(path: &PathBuf) -> Option<Track> {
     } else {
         "Unknown Artist".to_string()
     };
+    // Read ALL genre frames (a file may carry several), joined with " / " so the
+    // genre map can split them back into multiple genres. Falls back to the
+    // primary genre, then "Unknown Genre".
     let genre = tag
-        .and_then(|t| t.genre().map(|s| s.to_string()))
+        .map(|t| {
+            let all: Vec<String> = t
+                .get_strings(&lofty::tag::ItemKey::Genre)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            all.join(" / ")
+        })
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Unknown Genre".to_string());
     // Read MusicBrainz Artist ID for accurate image lookup and disambiguation
     let mbid = tag
@@ -2835,6 +2846,143 @@ fn get_genre_tracks(
         .filter_map(|t| t.ok())
         .collect();
     Ok(tracks)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GenreStat {
+    pub name: String,
+    pub albums: usize,
+    pub artists: usize,
+}
+
+/// Per-genre album & artist counts, for sizing the genre map by a chosen metric.
+#[tauri::command]
+fn get_genre_stats(state: State<DbState>) -> Result<Vec<GenreStat>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT genre as name,
+                    COUNT(DISTINCT album || char(31) || album_artist) as albums,
+                    COUNT(DISTINCT album_artist) as artists
+             FROM tracks GROUP BY genre",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(GenreStat {
+                name: r.get(0)?,
+                albums: r.get::<_, i64>(1)? as usize,
+                artists: r.get::<_, i64>(2)? as usize,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|x| x.ok()).collect())
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GenreCooccurrence {
+    pub a: String,
+    pub b: String,
+    pub shared: usize,
+}
+
+/// Pairs of genres that share album-artists in the user's library, with strength
+/// = number of shared artists. Drives the data-driven "affinity" overlay.
+#[tauri::command]
+fn get_genre_cooccurrence(
+    state: State<DbState>,
+    min_shared: Option<usize>,
+) -> Result<Vec<GenreCooccurrence>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let min = min_shared.unwrap_or(2) as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT a.genre, b.genre, COUNT(DISTINCT a.album_artist) AS shared
+             FROM (SELECT DISTINCT genre, album_artist FROM tracks) a
+             JOIN (SELECT DISTINCT genre, album_artist FROM tracks) b
+               ON a.album_artist = b.album_artist AND a.genre < b.genre
+             GROUP BY a.genre, b.genre
+             HAVING shared >= ?1
+             ORDER BY shared DESC
+             LIMIT 3000",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![min], |r| {
+            Ok(GenreCooccurrence {
+                a: r.get(0)?,
+                b: r.get(1)?,
+                shared: r.get::<_, i64>(2)? as usize,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|x| x.ok()).collect())
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MergeResult {
+    pub updated: usize,      // DB rows changed (drives the app)
+    pub file_failed: usize,  // files whose tag could not be rewritten on disk
+}
+
+/// Opt-in metadata cleanup: rewrite the genre tag of every track whose genre is
+/// in `from_genres` to `to_genre`. The DB is always updated (so the app reflects
+/// the merge); the file tag is rewritten best-effort. User-initiated only.
+#[tauri::command]
+fn rewrite_genre_tag(
+    db: State<'_, DbState>,
+    from_genres: Vec<String>,
+    to_genre: String,
+) -> Result<MergeResult, String> {
+    use lofty::config::WriteOptions;
+    if to_genre.trim().is_empty() || from_genres.is_empty() {
+        return Ok(MergeResult { updated: 0, file_failed: 0 });
+    }
+    let conn = db.0.get().map_err(|e| format!("db pool: {e}"))?;
+    let placeholders = from_genres.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT path FROM tracks WHERE genre IN ({placeholders})");
+    let paths: Vec<String> = {
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(from_genres.iter()), |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    if paths.is_empty() {
+        return Err("No tracks matched those genres.".to_string());
+    }
+
+    let mut updated = 0usize;
+    let mut file_failed = 0usize;
+    for path in &paths {
+        // Always update the DB so the merge takes effect in the app immediately.
+        if conn
+            .execute("UPDATE tracks SET genre = ?1 WHERE path = ?2", rusqlite::params![&to_genre, path])
+            .is_ok()
+        {
+            updated += 1;
+        }
+        // Best-effort: also rewrite the tag on disk so it survives a re-scan.
+        let write = (|| -> Result<(), String> {
+            let mut tf = Probe::open(path)
+                .map_err(|e| format!("open: {e}"))?
+                .read()
+                .map_err(|e| format!("read: {e}"))?;
+            let has_primary = tf.primary_tag().is_some();
+            let tag = if has_primary { tf.primary_tag_mut() } else { tf.first_tag_mut() }
+                .ok_or_else(|| "no writable tag".to_string())?;
+            tag.set_genre(to_genre.clone());
+            tf.save_to_path(path, WriteOptions::default())
+                .map_err(|e| format!("save: {e}"))?;
+            Ok(())
+        })();
+        if let Err(e) = write {
+            file_failed += 1;
+            eprintln!("rewrite_genre_tag: file not written {path}: {e}");
+        }
+    }
+    Ok(MergeResult { updated, file_failed })
 }
 
 #[tauri::command]
@@ -5589,6 +5737,9 @@ pub fn run() {
             get_artist_details,
             search_genres,
             get_genre_tracks,
+            get_genre_stats,
+            get_genre_cooccurrence,
+            rewrite_genre_tag,
             clear_music_library,
             clear_books_library,
             clear_artwork_cache,

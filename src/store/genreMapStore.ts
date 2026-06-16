@@ -25,10 +25,14 @@ export interface GenreAlias {
   mode: "merge" | "move";
 }
 
+// A node the user dragged into place — fixed and persisted across sessions.
+export interface GenrePin { id: string; x: number; y: number; }
+
 interface GenreMapState {
   customNodes: CustomGenreNode[];
   customLinks: CustomGenreLink[];
   aliases: GenreAlias[];
+  pins: GenrePin[];
   addNode: (label: string, family: string) => string | null;
   removeNode: (id: string) => void;
   addLink: (source: string, target: string) => void;
@@ -36,6 +40,9 @@ interface GenreMapState {
   updateLink: (id: string, patch: { label?: string; weight?: number }) => void;
   setAlias: (tag: string, nodeId: string, mode?: "merge" | "move") => void;
   removeAlias: (norm: string) => void;
+  setPin: (id: string, x: number, y: number) => void;
+  removePin: (id: string) => void;
+  clearPins: () => void;
 }
 
 function uid(prefix: string): string {
@@ -50,6 +57,7 @@ export const useGenreMapStore = create<GenreMapState>()(
       customNodes: [],
       customLinks: [],
       aliases: [],
+      pins: [],
       addNode: (label, family) => {
         const trimmed = label.trim();
         if (!trimmed) return null;
@@ -87,6 +95,9 @@ export const useGenreMapStore = create<GenreMapState>()(
         set({ aliases: [...rest, { norm, tag, nodeId, mode }] });
       },
       removeAlias: (norm) => set({ aliases: get().aliases.filter((a) => a.norm !== norm) }),
+      setPin: (id, x, y) => set({ pins: [...get().pins.filter((p) => p.id !== id), { id, x, y }] }),
+      removePin: (id) => set({ pins: get().pins.filter((p) => p.id !== id) }),
+      clearPins: () => set({ pins: [] }),
     }),
     { name: "libera-genre-map" },
   ),
