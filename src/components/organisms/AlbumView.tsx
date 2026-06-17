@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { Track } from "../../types/track";
 import { Album } from "../../types/album";
-import { useArtwork } from "../../hooks/useArtwork";
+import { useArtwork, bumpArtworkEpoch } from "../../hooks/useArtwork";
 import { usePlayerStore } from "../../store/playerStore";
 import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -53,6 +53,7 @@ export function AlbumView({ album, onBack }: AlbumViewProps) {
         albumName: album.album,
         albumArtist: album.artist,
       });
+      bumpArtworkEpoch();
       await qc.invalidateQueries({ queryKey: ["artwork", album.cover_path] });
       showToast("Cover art fetched successfully");
     } catch (e) {

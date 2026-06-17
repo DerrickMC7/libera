@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
+import { motion, AnimatePresence } from "framer-motion";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { useGenres } from "../../hooks/useGenres";
@@ -11,6 +12,7 @@ import { useRecentlyPlayedStore } from "../../store/recentlyPlayedStore";
 import { useToastStore } from "../../store/toastStore";
 import { useCreatePlaylist, useAddToPlaylist } from "../../hooks/usePlaylist";
 import { useGenreMapStore, GenreAlias } from "../../store/genreMapStore";
+import { getSharedAnalyser } from "../../audio/analyserBus";
 import { Track } from "../../types/track";
 import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import {
@@ -441,11 +443,249 @@ function tickPhysics(sim: Sim) {
 
 // ─── Component ───────────────────────────────────────────────────────────────────
 
+// Scalloped "wavy circle" outline (Google-style): the radius is modulated by a single
+// sine harmonic so the circumference has `lobes` evenly-spaced, rounded bumps (rounded
+// peaks AND valleys — like a cog with soft teeth). The `rot` phase travels the scallops
+// around the ring. Points are stitched with quadratic curves through edge midpoints so
+// the outline stays smooth and petal-like rather than faceted.
+function scallopPath(R: number, rot: number, amp: number, lobes: number): string {
+  const N = Math.max(96, lobes * 10);
+  const pts: [number, number][] = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const rr = R * (1 + amp * Math.sin(lobes * a + rot));
+    pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+  }
+  const mid = (i: number, j: number) =>
+    `${((pts[i][0] + pts[j][0]) / 2).toFixed(2)},${((pts[i][1] + pts[j][1]) / 2).toFixed(2)}`;
+  let d = "M" + mid(N - 1, 0);
+  for (let i = 0; i < N; i++) {
+    const next = (i + 1) % N;
+    d += `Q${pts[i][0].toFixed(2)},${pts[i][1].toFixed(2)} ${mid(i, next)}`;
+  }
+  return d + "Z";
+}
+
+// Lobe count of the "wavy circle" scallops (shared by every layer so node + pulse read
+// as one shape).
+const PULSE_LOBES = 12;
+
+// "Now playing" aura around the genre node the current track belongs to: a breathing
+// scalloped body, a soft inner aura, a wavy circumference ring, and ripples — all in the
+// node's colour. Driven by its own rAF writing SVG attributes directly (no React
+// re-render), reading the node's live position each frame. Two slots (current + outgoing)
+// crossfade so switching tracks dissolves one node into the next. The loop sleeps when
+// nothing is playing and is woken on play/track-change, and it honours reduced-motion.
+function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
+  simRef: { current: Sim | null };
+  nodeId: string | null;
+  playing: boolean;
+  sizeMetric: SizeMetric;
+  scale: number;
+}) {
+  const gRef = useRef<SVGGElement>(null);
+  const gCur = useRef<SVGGElement>(null);
+  const gOut = useRef<SVGGElement>(null);
+  const bodyC = useRef<SVGPathElement>(null);
+  const auraC = useRef<SVGPathElement>(null);
+  const ringC = useRef<SVGPathElement>(null);
+  const bodyO = useRef<SVGPathElement>(null);
+  const auraO = useRef<SVGPathElement>(null);
+  const ringO = useRef<SVGPathElement>(null);
+  const rip1 = useRef<SVGCircleElement>(null);
+  const rip2 = useRef<SVGCircleElement>(null);
+
+  const nodeIdRef = useRef(nodeId); nodeIdRef.current = nodeId;
+  const playingRef = useRef(playing); playingRef.current = playing;
+  const metricRef = useRef(sizeMetric); metricRef.current = sizeMetric;
+  const scaleRef = useRef(scale); scaleRef.current = scale;
+  const reduceRef = useRef(false);
+  const wakeRef = useRef<(() => void) | null>(null);
+
+  // Track the OS "reduce motion" preference so we can freeze the spin/beat/breath.
+  useEffect(() => {
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reduceRef.current = mql.matches;
+    const onChange = () => { reduceRef.current = mql.matches; wakeRef.current?.(); };
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    let raf = 0;
+    let running = false;
+    const t0 = performance.now();
+    let lastNow = 0;
+    // Two crossfade slots: `cur` fades in to the playing node, `out` fades the previous
+    // one away. env/outEnv are linear 0..1 envelopes (~1s each).
+    let curId: string | null = null, env = 0;
+    let outId: string | null = null, outEnv = 0;
+    // Beat state — spectral-flux onset detection with auto-gain (see below).
+    let beat = 0, bassPrev = 0, fluxPeak = 0.01;
+    let freq: Uint8Array | null = null;
+
+    const hide = (b: SVGPathElement | null, a: SVGPathElement | null, r: SVGPathElement | null) => {
+      if (b) b.style.opacity = "0"; if (a) a.style.opacity = "0"; if (r) r.style.opacity = "0";
+    };
+
+    const loop = (now: number) => {
+      const g = gRef.current;
+      if (!g) { running = false; raf = 0; return; }
+      const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
+      lastNow = now;
+      const reduce = reduceRef.current;
+
+      const id = nodeIdRef.current;
+      const targetNode = id ? simRef.current?.byId.get(id) ?? null : null;
+      const want = playingRef.current && !!targetNode;
+      const targetId = want ? id : null;
+
+      // Focus handoff. A new focus node dissolves out the old slot and fades in the new
+      // — so first play (null → node) and track-switches both run a clean 1s ramp.
+      if (targetId !== curId) {
+        if (targetId && targetId === outId) {
+          curId = outId; env = outEnv; outId = null; outEnv = 0; // resuming the fading node
+        } else {
+          if (env > 0.001 && curId) { outId = curId; outEnv = env; } // current → outgoing
+          curId = targetId; env = 0;
+        }
+      }
+      env = Math.max(0, Math.min(1, env + (curId ? dt : -dt)));
+      if (outEnv > 0) { outEnv = Math.max(0, outEnv - dt); if (outEnv === 0) outId = null; }
+
+      const curNode = curId ? simRef.current?.byId.get(curId) ?? null : null;
+      const outNode = outId ? simRef.current?.byId.get(outId) ?? null : null;
+
+      // Nothing to show → sleep (stop the rAF until woken by play/track-change). Only
+      // when there's no focus node AND both envelopes have drained — NOT merely because
+      // env is momentarily 0 while a freshly-adopted node is still ramping in.
+      if (!curId && env <= 0 && outEnv <= 0) {
+        g.style.display = "none";
+        beat = 0; bassPrev = 0; fluxPeak = 0.01;
+        running = false; raf = 0; return;
+      }
+      g.style.display = "";
+      const t = (now - t0) / 1000;
+
+      // ── Beat: spectral flux + auto-gain ──────────────────────────────────────────
+      // We don't use raw bass loudness (that just tracks how loud the song is); we track
+      // the frame-to-frame *rise* in bass energy (an onset/flux), then normalise it
+      // against a slowly-decaying peak so quiet and loud tracks pump by similar amounts.
+      // The result drives a fast-attack / exponential-release envelope: a beat, not a
+      // wobble. Frozen entirely under reduced-motion.
+      let onset = 0;
+      if (curNode && !reduce) {
+        const an = getSharedAnalyser();
+        if (an) {
+          if (!freq || freq.length !== an.frequencyBinCount) freq = new Uint8Array(an.frequencyBinCount);
+          an.getByteFrequencyData(freq);
+          const lo = 1, hi = Math.min(10, freq.length - 1);
+          let s = 0; for (let i = lo; i <= hi; i++) s += freq[i];
+          const bass = s / ((hi - lo + 1) * 255);
+          const flux = Math.max(0, bass - bassPrev);
+          bassPrev = bass;
+          fluxPeak = Math.max(flux, fluxPeak * Math.pow(0.5, dt / 2), 0.01); // 2s half-life, 0.01 floor
+          onset = Math.min(1, flux / fluxPeak);
+        }
+      }
+      beat = Math.max(beat * Math.exp(-dt / 0.15), onset);
+
+      const bodyRot = reduce ? 0 : t * 0.35;
+      const auraRot = reduce ? 0 : t * 0.5;
+      const ringRot = reduce ? 0 : -t * 0.4;
+
+      // Paint one pulse (body + aura + ring) for a node at envelope `vis`, beat `pump`.
+      const paint = (
+        b: SVGPathElement | null, a: SVGPathElement | null, r: SVGPathElement | null,
+        node: SimNode, vis: number, pump: number,
+      ): number => {
+        const e = vis * vis * (3 - 2 * vis); // smoothstep — eases the circle↔scallop morph
+        const R = Math.max(6, baseRadius(node, metricRef.current) * scaleRef.current);
+        const breath = reduce ? 0.5 : 0.5 + 0.5 * Math.sin(t * 1.6);
+        const amp = (0.10 + 0.05 * breath) * e;
+        const col = node.active ? node.color : "#8a8270";
+        const beatR = 1 + 0.10 * pump;
+        if (b) {
+          b.setAttribute("d", scallopPath(R * (0.97 + 0.04 * breath) * (1 + 0.18 * pump), bodyRot, (0.07 + 0.03 * breath) * e, PULSE_LOBES));
+          b.style.opacity = String(vis);
+          b.style.fill = col;
+          // Mirror the node's own border: custom/reparented nodes keep their dashed accent.
+          const accent = node.custom || node.reparented;
+          b.style.stroke = accent ? "var(--accent)" : "rgba(255,255,255,0.28)";
+          b.style.strokeDasharray = accent ? "3 2" : "none";
+        }
+        if (a) { a.setAttribute("d", scallopPath(R * 1.42 * beatR, auraRot, amp * 0.7, PULSE_LOBES)); a.style.opacity = String(0.16 * vis); a.style.fill = col; }
+        if (r) { r.setAttribute("d", scallopPath(R * 1.72 * beatR, ringRot, amp, PULSE_LOBES)); r.style.opacity = String(0.55 * vis); r.style.stroke = col; }
+        return R;
+      };
+
+      // Current slot — full treatment with ripples.
+      if (curNode) {
+        gCur.current?.setAttribute("transform", `translate(${curNode.x},${curNode.y})`);
+        const pump = reduce ? 0 : beat * (env * env * (3 - 2 * env));
+        const R = paint(bodyC.current, auraC.current, ringC.current, curNode, env, pump);
+        const ripple = (el: SVGCircleElement | null, off: number) => {
+          if (!el) return;
+          if (reduce) { el.style.opacity = "0"; return; } // ripples are pure motion
+          const p = (t * 0.5 + off) % 1;
+          el.setAttribute("r", String(R * 1.25 + p * R * 2.4));
+          el.style.stroke = curNode.active ? curNode.color : "#8a8270";
+          el.style.opacity = String(0.42 * (1 - p) * env);
+        };
+        ripple(rip1.current, 0); ripple(rip2.current, 0.5);
+      } else {
+        hide(bodyC.current, auraC.current, ringC.current);
+        if (rip1.current) rip1.current.style.opacity = "0";
+        if (rip2.current) rip2.current.style.opacity = "0";
+      }
+
+      // Outgoing slot — dissolving away, no beat, no ripples.
+      if (outNode) {
+        gOut.current?.setAttribute("transform", `translate(${outNode.x},${outNode.y})`);
+        paint(bodyO.current, auraO.current, ringO.current, outNode, outEnv, 0);
+      } else {
+        hide(bodyO.current, auraO.current, ringO.current);
+      }
+
+      raf = requestAnimationFrame(loop);
+    };
+
+    const start = () => { if (!running) { running = true; lastNow = 0; raf = requestAnimationFrame(loop); } };
+    wakeRef.current = start;
+    start();
+    return () => { if (raf) cancelAnimationFrame(raf); running = false; wakeRef.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simRef]);
+
+  // Wake the (possibly sleeping) loop whenever playback state changes.
+  useEffect(() => { wakeRef.current?.(); }, [playing, nodeId]);
+
+  const pathProps = { strokeWidth: 1, vectorEffect: "non-scaling-stroke" as const };
+  return (
+    <g ref={gRef} style={{ pointerEvents: "none", display: "none" }}>
+      <g ref={gOut}>
+        <path ref={auraO} stroke="none" />
+        <path ref={ringO} fill="none" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        <path ref={bodyO} {...pathProps} />
+      </g>
+      <g ref={gCur}>
+        <circle ref={rip2} fill="none" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        <circle ref={rip1} fill="none" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        <path ref={auraC} stroke="none" />
+        <path ref={ringC} fill="none" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+        <path ref={bodyC} {...pathProps} />
+      </g>
+    </g>
+  );
+}
+
 interface GenreMapProps { onBack: () => void; }
 
 export function GenreMap({ onBack }: GenreMapProps) {
   const { data: genres = [], isLoading } = useGenres("", true, "count");
   const hasTrack = usePlayerStore((s) => !!s.currentTrack);
+  const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
   const { customNodes, customLinks, aliases, pins, addNode, removeNode, addLink, removeLink, updateLink, setAlias, removeAlias, setPin, removePin, clearPins } = useGenreMapStore();
   const pinnedById = useMemo(() => new Map(pins.map((p) => [p.id, { x: p.x, y: p.y }])), [pins]);
   const { data: genreStats = [] } = useGenreStats();
@@ -499,6 +739,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
   const [selectionLoading, setSelectionLoading] = useState(false);
   const [pathSteps, setPathSteps] = useState<{ id: string; label: string; color: string; track: Track | null }[]>([]);
   const [pathTail, setPathTail] = useState<Track[]>([]);
+  const [transitionMeta, setTransitionMeta] = useState<Map<string, { label: string; color: string }>>(new Map());
   const [helpOpen, setHelpOpen] = useState(false);
   const [viewsOpen, setViewsOpen] = useState(false);
 
@@ -690,7 +931,10 @@ export function GenreMap({ onBack }: GenreMapProps) {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const { px, py } = relPoint(e);
     drag.current = { mode: "node", node, lastX: px, lastY: py, moved: 0 };
-    node.fx = node.x; node.fy = node.y; reheat(0.3);
+    // Pin in place, but don't reheat yet — a plain click (select) must leave the
+    // sim cold so its per-frame graph re-render doesn't jank the panel slide.
+    // A real drag warms the sim via reheat(0.3) in onPointerMove.
+    node.fx = node.x; node.fy = node.y;
   }
   function onSvgPointerDown(e: React.PointerEvent) {
     const { px, py } = relPoint(e);
@@ -715,10 +959,11 @@ export function GenreMap({ onBack }: GenreMapProps) {
         else if (selectMode) setSelection((s) => { const n = new Set(s); if (n.has(d.node!.id)) n.delete(d.node!.id); else n.add(d.node!.id); return n; });
         else setSelectedId(d.node.id);
         d.node.fx = null; d.node.fy = null;
+        // No reheat on a plain click — keeps the panel slide smooth.
       } else {
         setPin(d.node.id, d.node.x, d.node.y); d.node.pinned = true; // dragged → pin
+        reheat(0.15);
       }
-      reheat(0.15);
     } else if (d.mode === "lasso") {
       commitLasso(); setLasso(null);
     } else if (d.mode === "pan") {
@@ -782,8 +1027,14 @@ export function GenreMap({ onBack }: GenreMapProps) {
     if (!s || pathIds.length < 1) return;
     const steps: { id: string; label: string; color: string; track: Track | null }[] = [];
     const queue: Track[] = [];
+    // path → genre meta, so the path tab can annotate the *live* player queue by genre
+    // even after it's reordered (shuffle, manual edits).
+    const meta = new Map<string, { label: string; color: string }>();
     let destPool: Track[] = [];
     const lastId = pathIds[pathIds.length - 1];
+    const lastNode = s.byId.get(lastId);
+    const destLabel = lastNode?.label ?? "destination";
+    const destColor = lastNode && lastNode.active ? lastNode.color : "#3a3628";
     for (const id of pathIds) {
       const n = s.byId.get(id);
       if (!n) continue;
@@ -796,7 +1047,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
             for (const tr of t ?? []) if (!seen.has(tr.path)) { seen.add(tr.path); pool.push(tr); }
           } catch { /* skip */ }
         }
-        if (pool.length) { track = pool[Math.floor(Math.random() * pool.length)]; queue.push(track); }
+        if (pool.length) { track = pool[Math.floor(Math.random() * pool.length)]; queue.push(track); meta.set(track.path, { label: n.label, color: n.color }); }
         if (id === lastId) destPool = pool;
       }
       steps.push({ id, label: n.label, color: n.active ? n.color : "#3a3628", track });
@@ -808,15 +1059,42 @@ export function GenreMap({ onBack }: GenreMapProps) {
       tail = destPool.filter((t) => t.path !== usedPath);
       for (let i = tail.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tail[i], tail[j]] = [tail[j], tail[i]]; }
       tail = tail.slice(0, 40);
+      for (const t of tail) meta.set(t.path, { label: destLabel, color: destColor });
       queue.push(...tail);
     }
     setPathSteps(steps);
     setPathTail(tail);
-    if (queue.length) { const ps = usePlayerStore.getState(); ps.setQueue(queue, 0); ps.setIsPlaying(true); showToast(`Transitioning to ${s.byId.get(lastId)?.label ?? "destination"}`); }
+    setTransitionMeta(meta);
+    if (queue.length) {
+      // A path transition is inherently ordered (genre → genre → … → destination), so it
+      // must ignore the user's shuffle setting. setQueue() would shuffle everything after
+      // the first track — sweeping the destination genre's tail to the front so you skip
+      // straight to the last genre. Set queue and shuffledQueue identically so playback
+      // follows path order no matter what shuffle is set to. `transitionActive` lets the
+      // shuffle button warn before scrambling, and the path tab mirror the live queue.
+      usePlayerStore.setState({ queue, shuffledQueue: queue, queueIndex: 0, currentTrack: queue[0], manualQueuePaths: [], transitionActive: true });
+      usePlayerStore.getState().setIsPlaying(true);
+      showToast(`Transitioning to ${destLabel}`);
+    }
   }
 
   const sim = simRef.current;
   const selected = (sim && selectedId) ? sim.byId.get(selectedId) ?? null : null;
+
+  // Node the currently-playing track's genre maps to — for the "now playing" pulse.
+  // Prefer the active node that actually contains this user-genre tag (covers custom /
+  // "Other" nodes too), falling back to taxonomy resolution.
+  const playingNodeId = useMemo(() => {
+    if (!currentTrack || !sim) return null;
+    const g = normalizeGenre(currentTrack.genre || "");
+    if (g) {
+      for (const n of sim.nodes) {
+        if (n.active && n.userGenres.some((ug) => normalizeGenre(ug) === g)) return n.id;
+      }
+    }
+    const id = resolveGenreNode(currentTrack.genre || "");
+    return id && sim.byId.has(id) ? id : null;
+  }, [currentTrack, sim]);
 
   const affinityEdges = useMemo(() => {
     if (!sim || !affinity || cooccur.length === 0) return [];
@@ -1037,13 +1315,13 @@ export function GenreMap({ onBack }: GenreMapProps) {
       nodes={pathNodes}
       steps={pathSteps}
       tail={pathTail}
-      onClose={() => { setPathIds([]); setPathSteps([]); setPathTail([]); }}
+      meta={transitionMeta}
+      onClose={() => { setPathIds([]); setPathSteps([]); setPathTail([]); setTransitionMeta(new Map()); }}
       onJump={jumpTo}
       onTransition={buildTransition}
     />
   ) : selected ? (
     <GenreDetailPanel
-      key={selected.id}
       node={selected}
       connections={selectedConnections}
       onClose={() => setSelectedId(null)}
@@ -1057,6 +1335,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
       onUnpin={selected.pinned ? () => { removePin(selected.id); const n = sim?.byId.get(selected.id); if (n) { n.fx = null; n.fy = null; } reheat(0.3); } : undefined}
     />
   ) : null;
+  const panelOpen = sidePanel !== null;
 
   return createPortal(
     <div className={`fixed top-0 right-0 left-0 sm:left-[52px] ${hasTrack ? "bottom-16 sm:bottom-20" : "bottom-0"} z-40 flex bg-[#0e0d0b]`}>
@@ -1080,8 +1359,13 @@ export function GenreMap({ onBack }: GenreMapProps) {
           </div>
         </div>
 
-        {/* Toolbar */}
-        <div className="absolute top-4 sm:top-6 right-4 sm:right-6 z-30 flex flex-col items-end gap-2 w-[230px]">
+        {/* Toolbar — slides in sync with the node panel so it doesn't snap when
+            the map area resizes. layout="position" animates only the x-shift. */}
+        <motion.div
+          layout="position"
+          transition={{ type: "spring", stiffness: 400, damping: 40 }}
+          className="absolute top-4 sm:top-6 right-4 sm:right-6 z-30 flex flex-col items-end gap-2 w-[230px]"
+        >
           {/* Search */}
           <div className="relative w-full">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#5a5448]"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" /></svg>
@@ -1181,7 +1465,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
               </div>
             </div>
           )}
-        </div>
+        </motion.div>
 
         {connectMode && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 px-4 py-2 rounded-full bg-[#1a1814] border border-[var(--accent-a30)] shadow-xl">
@@ -1263,6 +1547,8 @@ export function GenreMap({ onBack }: GenreMapProps) {
                   return <path key={`path-${i}`} d={`M${a.x} ${a.y} Q${cx} ${cy} ${b.x} ${b.y}`} fill="none" stroke="var(--accent)" strokeWidth={2.6 / transform.k} strokeOpacity={0.9} strokeLinecap="round" />;
                 })}
 
+                <PlayingPulse simRef={simRef} nodeId={playingNodeId} playing={isPlaying} sizeMetric={sizeMetric} scale={scale} />
+
                 {sim.nodes.map((n) => {
                   if (!nodeVisible(n)) return null;
                   const r = baseRadius(n, sizeMetric) * scale;
@@ -1273,6 +1559,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
                   const isPathNode = pathSet.has(n.id);
                   const isMultiSel = selection.has(n.id);
                   const fill = n.active ? n.color : "#26241e";
+                  const isPlayingNode = isPlaying && playingNodeId === n.id;
                   const showLabel = n.depth === 0 || n.active || hoveredId === n.id || isSel || isRec || isPathNode || isMultiSel;
                   return (
                     <g key={n.id} transform={`translate(${n.x},${n.y})`} style={{ cursor: "pointer", opacity: op }}
@@ -1282,12 +1569,20 @@ export function GenreMap({ onBack }: GenreMapProps) {
                       {isPathNode && <circle r={r + 5 / transform.k} fill="none" stroke="var(--accent)" strokeWidth={2 / transform.k} strokeOpacity={0.85} />}
                       {isMultiSel && <circle r={r + 3 / transform.k} fill="var(--accent)" fillOpacity={0.12} stroke="var(--accent)" strokeWidth={1.6 / transform.k} />}
                       {(isSel || isConnFrom) && <circle r={r + 4 / transform.k} fill="none" stroke="var(--accent)" strokeWidth={2 / transform.k} />}
-                      <circle r={r} fill={fill} stroke={(n.custom || n.reparented) ? "var(--accent)" : n.active ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)"} strokeWidth={((n.custom || n.reparented) ? 1.4 : n.active ? 1 : 0.6) / transform.k} strokeDasharray={(n.custom || n.reparented) ? `${3 / transform.k} ${2 / transform.k}` : undefined} />
+                      {isPlayingNode ? (
+                        // The playing node's body is drawn & animated by <PlayingPulse> (a
+                        // breathing, slowly-spinning scallop), so skip the static circle here.
+                        null
+                      ) : (
+                        <circle r={r} fill={fill} stroke={(n.custom || n.reparented) ? "var(--accent)" : n.active ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)"} strokeWidth={((n.custom || n.reparented) ? 1.4 : n.active ? 1 : 0.6) / transform.k} strokeDasharray={(n.custom || n.reparented) ? `${3 / transform.k} ${2 / transform.k}` : undefined} />
+                      )}
                       {n.active && n.fuzzy && !n.custom && (
                         <circle r={r + 3 / transform.k} fill="none" stroke="#d9a441" strokeOpacity={0.55} strokeWidth={0.9 / transform.k} strokeDasharray={`${2 / transform.k} ${2 / transform.k}`} />
                       )}
                       {showLabel && (
-                        <text y={r + (n.depth === 0 ? 15 : 11) / transform.k} textAnchor="middle" fontSize={(n.depth === 0 ? 13 : 9) / transform.k} fontFamily={n.depth === 0 ? "Fraunces, serif" : "ui-monospace, monospace"} fill={n.active ? "#f0ead8" : "#5a5448"} style={{ paintOrder: "stroke", stroke: "#0e0d0b", strokeWidth: 3 / transform.k, strokeLinejoin: "round", pointerEvents: "none", userSelect: "none" }}>{n.label}</text>
+                        // Playing node's scallop peaks at ~1.31·r on a strong beat — push
+                        // its label clear of that so the text never collides with the body.
+                        <text y={(isPlayingNode ? r * 1.34 : r) + (n.depth === 0 ? 15 : 11) / transform.k} textAnchor="middle" fontSize={(n.depth === 0 ? 13 : 9) / transform.k} fontFamily={n.depth === 0 ? "Fraunces, serif" : "ui-monospace, monospace"} fill={n.active ? "#f0ead8" : "#5a5448"} style={{ paintOrder: "stroke", stroke: "#0e0d0b", strokeWidth: 3 / transform.k, strokeLinejoin: "round", pointerEvents: "none", userSelect: "none" }}>{n.label}</text>
                       )}
                     </g>
                   );
@@ -1302,9 +1597,14 @@ export function GenreMap({ onBack }: GenreMapProps) {
               style={{ left: Math.min(lasso.x0, lasso.x1), top: Math.min(lasso.y0, lasso.y1), width: Math.abs(lasso.x1 - lasso.x0), height: Math.abs(lasso.y1 - lasso.y0) }} />
           )}
 
-          {/* Mini-map */}
+          {/* Mini-map — slides in sync with the node panel (fixed-size box, so
+              layout="position" only animates the open/close shift). */}
           {mini && (
-            <div className="absolute bottom-3 right-3 z-20 rounded-lg overflow-hidden border border-white/10 bg-[#0e0d0b]/80 backdrop-blur-sm">
+            <motion.div
+              layout="position"
+              transition={{ type: "spring", stiffness: 400, damping: 40 }}
+              className="absolute bottom-3 right-3 z-20 rounded-lg overflow-hidden border border-white/10 bg-[#0e0d0b]/80 backdrop-blur-sm"
+            >
               <svg width={mini.W} height={mini.H} onClick={miniRecenter} className="block cursor-pointer">
                 {mini.dots.map((n) => { const { mx, my } = mini.toMini(n.x, n.y); return <circle key={n.id} cx={mx} cy={my} r={n.depth === 0 ? 2 : 1.3} fill={n.active ? n.color : "#3a3628"} />; })}
                 {(() => {
@@ -1314,7 +1614,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
                   return <rect x={a.mx} y={a.my} width={Math.max(2, b.mx - a.mx)} height={Math.max(2, b.my - a.my)} fill="none" stroke="var(--accent)" strokeWidth={1} />;
                 })()}
               </svg>
-            </div>
+            </motion.div>
           )}
 
           {/* Legend — click to isolate a family */}
@@ -1336,7 +1636,14 @@ export function GenreMap({ onBack }: GenreMapProps) {
         </div>
       </div>
 
-      {sidePanel}
+      {/* Invisible spacer reserves the panel's width in the flex row so the map
+          shrinks; the panel itself (below) is an absolute overlay that slides over
+          this space. Reserving via a plain conditional — rather than letting the
+          AnimatePresence panel hold a flex slot — makes the map reflow synchronous
+          in BOTH directions, so the toolbar's layout animation stays in sync on
+          close as well as open. */}
+      {panelOpen && <div aria-hidden className="w-[340px] sm:w-[400px] shrink-0" />}
+      <AnimatePresence>{sidePanel}</AnimatePresence>
 
       {diagOpen && (
         <TagDiagnostics
@@ -1392,12 +1699,24 @@ function GenreDetailPanel({
 }) {
   const { setQueue, setIsPlaying, currentTrack } = usePlayerStore();
   const [tracks, setTracks] = useState<Track[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [editLink, setEditLink] = useState<string | null>(null);
+  // Hold the heavy track fetch + list render until the slide-in finishes so the
+  // animation stays smooth. Reused across node switches, so this only gates the
+  // first open (onAnimationComplete fires once per mount).
+  const [ready, setReady] = useState(false);
+  // Safety net: never leave the panel stuck on the skeleton if the spring's
+  // onAnimationComplete doesn't fire (interrupted spring, reduced motion, etc.).
+  useEffect(() => {
+    if (ready) return;
+    const t = setTimeout(() => setReady(true), 500);
+    return () => clearTimeout(t);
+  }, [ready]);
   const genreKey = node.userGenres.join("|");
 
   useEffect(() => {
-    if (!node.active || node.userGenres.length === 0) { setTracks([]); return; }
+    if (!ready) return;
+    if (!node.active || node.userGenres.length === 0) { setTracks([]); setLoading(false); return; }
     let cancelled = false; setLoading(true);
     (async () => {
       const all: Track[] = []; const seen = new Set<string>();
@@ -1411,7 +1730,7 @@ function GenreDetailPanel({
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node.id, genreKey]);
+  }, [ready, node.id, genreKey]);
 
   const topArtists = useMemo(() => {
     const m = new Map<string, number>();
@@ -1433,7 +1752,14 @@ function GenreDetailPanel({
   const hasMusic = node.userGenres.length > 0;
 
   return (
-    <div className="w-[340px] sm:w-[400px] shrink-0 h-full border-l border-white/6 bg-[#0e0d0b] flex flex-col">
+    <motion.div
+      initial={{ x: "100%", opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: "100%", opacity: 0 }}
+      transition={{ type: "spring", stiffness: 400, damping: 40 }}
+      onAnimationComplete={() => setReady(true)}
+      className="absolute top-0 right-0 bottom-0 z-30 w-[340px] sm:w-[400px] border-l border-white/6 bg-[#0e0d0b] flex flex-col"
+    >
       <div className="px-5 pt-5 pb-4 border-b border-white/6 overflow-y-auto max-h-[55%]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1582,7 +1908,7 @@ function GenreDetailPanel({
         )}
         {hasMusic && !loading && tracks.length === 0 && (<p className="text-xs text-[#3a3628] px-2 py-6 text-center">No tracks found.</p>)}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -1827,7 +2153,7 @@ function AffinityPanel({
   onJump: (id: string) => void;
 }) {
   return (
-    <div className="w-[340px] sm:w-[400px] shrink-0 h-full border-l border-white/6 bg-[#0e0d0b] flex flex-col">
+    <div className="absolute top-0 right-0 bottom-0 z-30 w-[340px] sm:w-[400px] border-l border-white/6 bg-[#0e0d0b] flex flex-col">
       <div className="px-5 pt-5 pb-4 border-b border-white/6">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1885,7 +2211,7 @@ function MultiSelectPanel({
 }) {
   const { currentTrack, setQueue, setIsPlaying } = usePlayerStore();
   return (
-    <div className="w-[340px] sm:w-[400px] shrink-0 h-full border-l border-white/6 bg-[#0e0d0b] flex flex-col">
+    <div className="absolute top-0 right-0 bottom-0 z-30 w-[340px] sm:w-[400px] border-l border-white/6 bg-[#0e0d0b] flex flex-col">
       <div className="px-5 pt-5 pb-4 border-b border-white/6">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1962,19 +2288,43 @@ function PathThumb({ path }: { path: string }) {
 }
 
 function PathPanel({
-  nodes, steps, tail, onClose, onJump, onTransition,
+  nodes, steps, tail, meta, onClose, onJump, onTransition,
 }: {
   nodes: SimNode[];
   steps: { id: string; label: string; color: string; track: Track | null }[];
   tail: Track[];
+  meta: Map<string, { label: string; color: string }>;
   onClose: () => void;
   onJump: (id: string) => void;
   onTransition: () => void;
 }) {
   const from = nodes[0], to = nodes[nodes.length - 1];
   const rows = steps.length ? steps : nodes.map((n) => ({ id: n.id, label: n.label, color: n.active ? n.color : "#3a3628", track: null as Track | null }));
+
+  // Live player queue, so the "keeps playing <last genre>" tail stays in sync when the
+  // queue is shuffled or edited (the genre steps above stay as the planned journey).
+  const shuffle = usePlayerStore((s) => s.shuffle);
+  const queue = usePlayerStore((s) => s.queue);
+  const shuffledQueue = usePlayerStore((s) => s.shuffledQueue);
+  const currentPath = usePlayerStore((s) => s.currentTrack?.path);
+  const transitionActive = usePlayerStore((s) => s.transitionActive);
+  const jumpToTrack = usePlayerStore((s) => s.jumpToTrack);
+  const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
+
+  // The tail = destination-genre tracks still in the queue (excluding the per-genre step
+  // picks shown above), in their real play order. Falls back to the planned tail before
+  // the transition is played.
+  const tailRows = useMemo(() => {
+    if (!transitionActive) return tail.map((track) => ({ track, idx: -1 }));
+    const activeQueue = shuffle ? shuffledQueue : queue;
+    const stepPaths = new Set(steps.map((s) => s.track?.path).filter(Boolean));
+    return activeQueue
+      .map((track, idx) => ({ track, idx }))
+      .filter(({ track }) => meta.get(track.path)?.label === to?.label && !stepPaths.has(track.path));
+  }, [transitionActive, shuffle, shuffledQueue, queue, steps, meta, to?.label, tail]);
+
   return (
-    <div className="w-[340px] sm:w-[400px] shrink-0 h-full border-l border-white/6 bg-[#0e0d0b] flex flex-col">
+    <div className="absolute top-0 right-0 bottom-0 z-30 w-[340px] sm:w-[400px] border-l border-white/6 bg-[#0e0d0b] flex flex-col">
       <div className="px-5 pt-5 pb-4 border-b border-white/6">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1991,7 +2341,7 @@ function PathPanel({
         {nodes.length > 1 && (
           <>
             <button onClick={onTransition} className="mt-4 flex items-center gap-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-xs font-mono tracking-widest uppercase px-5 py-2.5 rounded-full transition-colors">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>Play transition
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>{transitionActive ? "Roll transition" : "Play transition"}
             </button>
             <p className="text-[10px] text-[#5a5448] mt-2 leading-relaxed">One song from each genre on the path, in order, then keeps playing {to?.label}.</p>
           </>
@@ -2019,21 +2369,30 @@ function PathPanel({
           ))}
         </div>
 
-        {tail.length > 0 && (
+        {tailRows.length > 0 && (
           <div className="mt-3 pt-3 border-t border-white/6">
             <p className="text-[9px] font-mono uppercase tracking-wider text-[#5a5448] mb-2">
-              Then keeps playing {to?.label} · {tail.length}
+              Then keeps playing {to?.label} · {tailRows.length}{transitionActive && shuffle ? " · shuffled" : ""}
             </p>
             <div className="flex flex-col gap-0.5">
-              {tail.map((t) => (
-                <div key={t.path} className="flex items-center gap-2.5 py-1">
-                  <PathThumb path={t.path} />
-                  <div className="min-w-0">
-                    <p className="text-xs text-[#c8bfa8] truncate">{t.title}</p>
-                    <p className="text-[10px] text-[#5a5448] truncate">{t.artist}</p>
-                  </div>
-                </div>
-              ))}
+              {tailRows.map(({ track: t, idx }) => {
+                const isCur = t.path === currentPath;
+                const clickable = idx >= 0;
+                return (
+                  <button
+                    key={t.path}
+                    disabled={!clickable}
+                    onClick={clickable ? () => { jumpToTrack(idx); setIsPlaying(true); } : undefined}
+                    className={`flex items-center gap-2.5 py-1 px-1 rounded text-left transition-colors ${isCur ? "bg-[var(--accent-a12)]" : clickable ? "hover:bg-white/5" : ""}`}
+                  >
+                    <PathThumb path={t.path} />
+                    <div className="min-w-0">
+                      <p className={`text-xs truncate ${isCur ? "text-[var(--accent)]" : "text-[#c8bfa8]"}`}>{t.title}</p>
+                      <p className="text-[10px] text-[#5a5448] truncate">{t.artist}</p>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

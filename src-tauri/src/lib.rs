@@ -36,11 +36,12 @@ pub struct DownloadControl {
 
 pub struct MetadataFetchControl {
     cancelled: AtomicBool,
+    running: AtomicBool,
 }
 
 impl MetadataFetchControl {
     fn new() -> Self {
-        Self { cancelled: AtomicBool::new(false) }
+        Self { cancelled: AtomicBool::new(false), running: AtomicBool::new(false) }
     }
 }
 
@@ -488,13 +489,19 @@ fn get_tracks_ordered(
 ) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
     let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album FROM tracks";
+    // Every clause ends in `path` (a UNIQUE column) as a deterministic tiebreaker.
+    // Without it, rows that tie on the sort key (very common for duration, and for
+    // album/year groupings) come back in an unspecified order that can differ between
+    // the separate LIMIT/OFFSET page queries and the full ordered query — causing rows
+    // to duplicate or vanish across page boundaries, and play-from-index to mismatch.
     let order_clause = match sort_by.as_deref() {
-        Some("title") => "ORDER BY LOWER(title)",
-        Some("album") => "ORDER BY album_artist, album",
-        Some("duration_asc") => "ORDER BY duration_secs ASC",
-        Some("duration_desc") => "ORDER BY duration_secs DESC",
-        Some("year") => "ORDER BY year DESC NULLS LAST, album_artist, album",
-        _ => "ORDER BY album_artist, album, disc_number, track_number",
+        Some("title") => "ORDER BY LOWER(title), path",
+        Some("artist") => "ORDER BY LOWER(artist), album, disc_number, track_number, path",
+        Some("album") => "ORDER BY album_artist, album, disc_number, track_number, path",
+        Some("duration_asc") => "ORDER BY duration_secs ASC, path",
+        Some("duration_desc") => "ORDER BY duration_secs DESC, path",
+        Some("year") => "ORDER BY year DESC NULLS LAST, album_artist, album, disc_number, track_number, path",
+        _ => "ORDER BY album_artist, album, disc_number, track_number, path",
     };
     let map_row = |row: &rusqlite::Row| {
         Ok(Track {
@@ -596,13 +603,19 @@ fn get_tracks_page(
 ) -> Result<Vec<Track>, String> {
     let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
     let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album FROM tracks";
+    // Every clause ends in `path` (a UNIQUE column) as a deterministic tiebreaker.
+    // Without it, rows that tie on the sort key (very common for duration, and for
+    // album/year groupings) come back in an unspecified order that can differ between
+    // the separate LIMIT/OFFSET page queries and the full ordered query — causing rows
+    // to duplicate or vanish across page boundaries, and play-from-index to mismatch.
     let order_clause = match sort_by.as_deref() {
-        Some("title") => "ORDER BY LOWER(title)",
-        Some("album") => "ORDER BY album_artist, album",
-        Some("duration_asc") => "ORDER BY duration_secs ASC",
-        Some("duration_desc") => "ORDER BY duration_secs DESC",
-        Some("year") => "ORDER BY year DESC NULLS LAST, album_artist, album",
-        _ => "ORDER BY album_artist, album, disc_number, track_number",
+        Some("title") => "ORDER BY LOWER(title), path",
+        Some("artist") => "ORDER BY LOWER(artist), album, disc_number, track_number, path",
+        Some("album") => "ORDER BY album_artist, album, disc_number, track_number, path",
+        Some("duration_asc") => "ORDER BY duration_secs ASC, path",
+        Some("duration_desc") => "ORDER BY duration_secs DESC, path",
+        Some("year") => "ORDER BY year DESC NULLS LAST, album_artist, album, disc_number, track_number, path",
+        _ => "ORDER BY album_artist, album, disc_number, track_number, path",
     };
     let map_row = |row: &rusqlite::Row| {
         Ok(Track {
@@ -671,6 +684,106 @@ fn get_tracks_page(
         }
     };
     Ok(tracks)
+}
+
+/// Lightweight companion to `get_tracks_ordered`: returns only the ordered list of
+/// track *paths* (no metadata). Lets the frontend build a play queue spanning the
+/// whole library without serializing every track's full metadata across the IPC
+/// bridge — display metadata is hydrated lazily in batches via `get_tracks_by_paths`.
+/// The ORDER BY must stay byte-identical to `get_tracks_ordered`/`get_tracks_page`.
+#[tauri::command]
+fn get_track_paths_ordered(
+    state: State<DbState>,
+    query: String,
+    sort_by: Option<String>,
+) -> Result<Vec<String>, String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let order_clause = match sort_by.as_deref() {
+        Some("title") => "ORDER BY LOWER(title), path",
+        Some("artist") => "ORDER BY LOWER(artist), album, disc_number, track_number, path",
+        Some("album") => "ORDER BY album_artist, album, disc_number, track_number, path",
+        Some("duration_asc") => "ORDER BY duration_secs ASC, path",
+        Some("duration_desc") => "ORDER BY duration_secs DESC, path",
+        Some("year") => "ORDER BY year DESC NULLS LAST, album_artist, album, disc_number, track_number, path",
+        _ => "ORDER BY album_artist, album, disc_number, track_number, path",
+    };
+    let get_path = |row: &rusqlite::Row| row.get::<_, String>(0);
+    let paths: Vec<String> = if query.is_empty() {
+        let mut stmt = conn
+            .prepare(&format!("SELECT path FROM tracks {}", order_clause))
+            .map_err(|e| e.to_string())?;
+        let v = stmt.query_map([], get_path).map_err(|e| e.to_string())?.filter_map(|t| t.ok()).collect();
+        v
+    } else {
+        let track_cols = &["LOWER(title)", "LOWER(artist)", "LOWER(album)"];
+        let (multi_cond, multi_params) = word_search_params(&query, 3, track_cols);
+        if !multi_cond.is_empty() {
+            let sql = format!("SELECT path FROM tracks WHERE {} {}", multi_cond, order_clause);
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let v = stmt.query_map(rusqlite::params_from_iter(multi_params.iter()), get_path)
+                .map_err(|e| e.to_string())?.filter_map(|t| t.ok()).collect();
+            v
+        } else {
+            let pattern = format!("%{}%", query.to_lowercase());
+            let sql = format!(
+                "SELECT path FROM tracks WHERE LOWER(title) LIKE ?1 OR LOWER(artist) LIKE ?1 OR LOWER(album) LIKE ?1 {}",
+                order_clause
+            );
+            let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let v = stmt.query_map(rusqlite::params![pattern], get_path)
+                .map_err(|e| e.to_string())?.filter_map(|t| t.ok()).collect();
+            v
+        }
+    };
+    Ok(paths)
+}
+
+/// Batch-fetch full track metadata for a set of paths, returned in the SAME order as
+/// the input (paths not found are skipped). Backs lazy queue hydration.
+#[tauri::command]
+fn get_tracks_by_paths(state: State<DbState>, paths: Vec<String>) -> Result<Vec<Track>, String> {
+    if paths.is_empty() {
+        return Ok(vec![]);
+    }
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let sql_base = "SELECT path, title, artist, album, album_artist, genre, year, track_number, track_total, disc_number, disc_total, duration_secs, bitrate, sample_rate, channels, file_size, mbid, replay_gain_track, replay_gain_album FROM tracks";
+    let map_row = |row: &rusqlite::Row| {
+        Ok(Track {
+            path: row.get(0)?,
+            title: row.get(1)?,
+            artist: row.get(2)?,
+            album: row.get(3)?,
+            album_artist: row.get(4)?,
+            genre: row.get(5)?,
+            year: row.get(6)?,
+            track_number: row.get(7)?,
+            track_total: row.get(8)?,
+            disc_number: row.get(9)?,
+            disc_total: row.get(10)?,
+            duration_secs: row.get(11)?,
+            bitrate: row.get(12)?,
+            sample_rate: row.get(13)?,
+            channels: row.get(14)?,
+            file_size: row.get(15)?,
+            mbid: row.get(16)?,
+            replay_gain_track: row.get(17)?,
+            replay_gain_album: row.get(18)?,
+        })
+    };
+    let mut by_path: std::collections::HashMap<String, Track> = std::collections::HashMap::new();
+    // Chunk to stay well under SQLite's bound-parameter limit (default 32766).
+    for chunk in paths.chunks(400) {
+        let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+        let sql = format!("{} WHERE path IN ({})", sql_base, placeholders);
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(chunk.iter()), map_row)
+            .map_err(|e| e.to_string())?;
+        for t in rows.filter_map(|t| t.ok()) {
+            by_path.insert(t.path.clone(), t);
+        }
+    }
+    Ok(paths.into_iter().filter_map(|p| by_path.remove(&p)).collect())
 }
 
 #[tauri::command]
@@ -1408,6 +1521,32 @@ async fn fetch_missing_artwork(
     Ok(thumb_path.to_string_lossy().to_string())
 }
 
+/// Save a TaggedFile's tags to `path` without risking corruption of the user's
+/// original audio file if the write is interrupted or fails. We copy the original
+/// to a sibling temp file, write the new tags into that copy, then atomically rename
+/// it over the original. If anything fails partway, the original is left untouched
+/// and the temp file is cleaned up. (std::fs::rename replaces the destination
+/// atomically on the same volume, including on Windows.)
+fn save_tag_atomic<P: AsRef<std::path::Path>>(
+    tf: &lofty::file::TaggedFile,
+    path: P,
+) -> Result<(), String> {
+    let orig = path.as_ref();
+    let tmp = orig.with_extension(format!(
+        "{}.libera-tmp",
+        orig.extension().and_then(|e| e.to_str()).unwrap_or("bin"),
+    ));
+    std::fs::copy(orig, &tmp).map_err(|e| format!("backup copy: {e}"))?;
+    let res = tf
+        .save_to_path(&tmp, lofty::config::WriteOptions::default())
+        .map_err(|e| format!("save: {e}"))
+        .and_then(|_| std::fs::rename(&tmp, orig).map_err(|e| format!("replace: {e}")));
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp); // never leave a stray temp file behind
+    }
+    res
+}
+
 #[tauri::command]
 fn set_track_artwork(
     app: tauri::AppHandle,
@@ -1417,7 +1556,6 @@ fn set_track_artwork(
     apply_to_album: bool,
 ) -> Result<(), String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    use lofty::config::WriteOptions;
     use lofty::picture::{MimeType, Picture, PictureType};
 
     // Decode base64 → raw bytes
@@ -1472,8 +1610,7 @@ fn set_track_artwork(
             .ok_or_else(|| format!("no writable tag in {path}"))?;
         tag.remove_picture_type(PictureType::CoverFront);
         tag.push_picture(pic);
-        tf.save_to_path(path, WriteOptions::default())
-            .map_err(|e| format!("save {path}: {e}"))?;
+        save_tag_atomic(&tf, path)?;
         Ok(())
     };
 
@@ -1615,7 +1752,6 @@ fn update_track_metadata(
     disc_number: Option<u32>,
     disc_total: Option<u32>,
 ) -> Result<(), String> {
-    use lofty::config::WriteOptions;
     use lofty::tag::ItemKey;
 
     // Write updated tags directly into the audio file
@@ -1661,8 +1797,7 @@ fn update_track_metadata(
         None => tag.remove_disk_total(),
     }
 
-    tf.save_to_path(&path, WriteOptions::default())
-        .map_err(|e| format!("save: {e}"))?;
+    save_tag_atomic(&tf, &path)?;
 
     // Sync the SQLite cache so the UI reflects the change without re-scanning
     let conn = db.0.get().map_err(|e| format!("db pool: {e}"))?;
@@ -3210,7 +3345,6 @@ fn rewrite_genre_tag(
     from_genres: Vec<String>,
     to_genre: String,
 ) -> Result<MergeResult, String> {
-    use lofty::config::WriteOptions;
     if to_genre.trim().is_empty() || from_genres.is_empty() {
         return Ok(MergeResult { updated: 0, file_failed: 0 });
     }
@@ -3249,8 +3383,7 @@ fn rewrite_genre_tag(
             let tag = if has_primary { tf.primary_tag_mut() } else { tf.first_tag_mut() }
                 .ok_or_else(|| "no writable tag".to_string())?;
             tag.set_genre(to_genre.clone());
-            tf.save_to_path(path, WriteOptions::default())
-                .map_err(|e| format!("save: {e}"))?;
+            save_tag_atomic(&tf, path)?;
             Ok(())
         })();
         if let Err(e) = write {
@@ -3259,6 +3392,25 @@ fn rewrite_genre_tag(
         }
     }
     Ok(MergeResult { updated, file_failed })
+}
+
+/// Remove a single track from the library database. This does NOT delete the file on
+/// disk — re-scanning its folder will re-add it. Also cleans up the track's rows in
+/// the dependent tables (artists / playlists / lyrics) so nothing dangles.
+#[tauri::command]
+fn remove_track(state: State<DbState>, path: String) -> Result<(), String> {
+    let conn = state.0.get().map_err(|e| format!("Pool error: {}", e))?;
+    let removed = conn
+        .execute("DELETE FROM tracks WHERE path = ?1", rusqlite::params![&path])
+        .map_err(|e| e.to_string())?;
+    if removed == 0 {
+        return Err("Track not found in library".to_string());
+    }
+    // Best-effort cleanup of dependent rows.
+    let _ = conn.execute("DELETE FROM track_artists WHERE track_path = ?1", rusqlite::params![&path]);
+    let _ = conn.execute("DELETE FROM playlist_tracks WHERE track_path = ?1", rusqlite::params![&path]);
+    let _ = conn.execute("DELETE FROM lyrics_cache WHERE track_path = ?1", rusqlite::params![&path]);
+    Ok(())
 }
 
 #[tauri::command]
@@ -3767,24 +3919,179 @@ fn cancel_metadata_fetch(control: State<MetadataFetchControl>) {
     control.cancelled.store(true, Ordering::Relaxed);
 }
 
+/// Genre values that mean "no real genre" — treated as missing so the fetch tries
+/// to fill them in. Kept in sync with the SELECT filter in fetch_missing_metadata.
+fn is_placeholder_genre(g: &str) -> bool {
+    matches!(
+        g.trim().to_ascii_lowercase().as_str(),
+        "" | "unknown" | "unknown genre" | "[unknown]" | "<unknown>"
+    )
+}
+
+async fn mb_get_json(client: &reqwest::Client, url: &str) -> Option<serde_json::Value> {
+    match client.get(url).send().await {
+        Ok(resp) if resp.status().is_success() => resp.json::<serde_json::Value>().await.ok(),
+        _ => None,
+    }
+}
+
+/// Enforce ~1 request/second to MusicBrainz across ALL request types, measured from
+/// the previous request's start (so the request's own latency counts toward the gap).
+async fn mb_pace(last: &mut Option<std::time::Instant>) {
+    let interval = std::time::Duration::from_millis(1100);
+    if let Some(t) = last {
+        let elapsed = t.elapsed();
+        if elapsed < interval {
+            tokio::time::sleep(interval - elapsed).await;
+        }
+    }
+    *last = Some(std::time::Instant::now());
+}
+
+/// Most-voted name from a MusicBrainz `genres` / `tags` array (`[{name, count}, …]`).
+fn mb_top_named(arr: Option<&serde_json::Value>) -> Option<String> {
+    arr?
+        .as_array()?
+        .iter()
+        .max_by_key(|t| t.get("count").and_then(|c| c.as_i64()).unwrap_or(0))
+        .and_then(|t| t.get("name").and_then(|n| n.as_str()).map(str::to_string))
+}
+
+/// Release year via a recording search. (Search ignores `inc`, and recordings rarely
+/// carry genre tags anyway, so we use this only for the year.)
+async fn mb_recording_year(client: &reqwest::Client, title: &str, artist: &str) -> Option<i32> {
+    let q = format!("recording:\"{}\" AND artist:\"{}\"", title.replace('"', ""), artist.replace('"', ""));
+    let url = format!(
+        "https://musicbrainz.org/ws/2/recording/?query={}&limit=1&fmt=json",
+        urlencoding::encode(&q),
+    );
+    let v = mb_get_json(client, &url).await?;
+    let date = v["recordings"].get(0)?.get("first-release-date")?.as_str()?;
+    date.get(..4)?.parse().ok()
+}
+
+/// Resolve an (album, artist) to a release-group MBID via search.
+async fn mb_release_group_mbid(client: &reqwest::Client, album: &str, artist: &str) -> Option<String> {
+    let q = format!("releasegroup:\"{}\" AND artist:\"{}\"", album.replace('"', ""), artist.replace('"', ""));
+    let url = format!(
+        "https://musicbrainz.org/ws/2/release-group/?query={}&limit=1&fmt=json",
+        urlencoding::encode(&q),
+    );
+    let v = mb_get_json(client, &url).await?;
+    Some(v["release-groups"].get(0)?.get("id")?.as_str()?.to_string())
+}
+
+/// Resolve a (title, artist) to a recording MBID via search.
+async fn mb_recording_mbid(client: &reqwest::Client, title: &str, artist: &str) -> Option<String> {
+    let q = format!("recording:\"{}\" AND artist:\"{}\"", title.replace('"', ""), artist.replace('"', ""));
+    let url = format!(
+        "https://musicbrainz.org/ws/2/recording/?query={}&limit=1&fmt=json",
+        urlencoding::encode(&q),
+    );
+    let v = mb_get_json(client, &url).await?;
+    Some(v["recordings"].get(0)?.get("id")?.as_str()?.to_string())
+}
+
+/// Top genre for an entity, via a lookup (lookups DO honour `inc`). `kind` is
+/// "release-group" or "recording". Prefers curated `genres`, falls back to `tags`.
+async fn mb_entity_genre(client: &reqwest::Client, kind: &str, mbid: &str) -> Option<String> {
+    let url = format!("https://musicbrainz.org/ws/2/{}/{}?inc=genres+tags&fmt=json", kind, mbid);
+    let v = mb_get_json(client, &url).await?;
+    mb_top_named(v.get("genres")).or_else(|| mb_top_named(v.get("tags")))
+}
+
+/// Find a TRACK-level genre (never the artist's broad genre): the genre of the
+/// release the track belongs to (its album / release-group), resolved from the
+/// track's own album tag and cached per album so repeats are free. Album-less tracks
+/// (singles with no album tag) fall back to the recording's own genre. Returns the
+/// number of MusicBrainz requests it actually made (0 when fully served from cache).
+async fn resolve_track_genre(
+    client: &reqwest::Client,
+    last_req: &mut Option<std::time::Instant>,
+    rg_mbid_cache: &mut std::collections::HashMap<String, Option<String>>,
+    rg_genre_cache: &mut std::collections::HashMap<String, Option<String>>,
+    title: &str,
+    artist: &str,
+    album: &str,
+    album_artist: &str,
+) -> Option<String> {
+    let alb_artist = if album_artist.trim().is_empty() { artist } else { album_artist };
+
+    if !album.trim().is_empty() {
+        let key = format!("{}|{}", album.to_lowercase(), alb_artist.to_lowercase());
+        let mbid = match rg_mbid_cache.get(&key) {
+            Some(m) => m.clone(),
+            None => {
+                mb_pace(last_req).await;
+                let m = mb_release_group_mbid(client, album, alb_artist).await;
+                rg_mbid_cache.insert(key, m.clone());
+                m
+            }
+        };
+        // Album resolved (or known-missing): its genre is authoritative for the track.
+        // Don't fall through to a per-track recording lookup — that's the slow path we
+        // want to avoid for the common (album present) case.
+        if let Some(mbid) = mbid {
+            return match rg_genre_cache.get(&mbid) {
+                Some(g) => g.clone(),
+                None => {
+                    mb_pace(last_req).await;
+                    let g = mb_entity_genre(client, "release-group", &mbid).await;
+                    rg_genre_cache.insert(mbid, g.clone());
+                    g
+                }
+            };
+        }
+        return None;
+    }
+
+    // No album tag — best effort from the recording itself.
+    mb_pace(last_req).await;
+    let rec_mbid = mb_recording_mbid(client, title, artist).await?;
+    mb_pace(last_req).await;
+    mb_entity_genre(client, "recording", &rec_mbid).await
+}
+
 #[tauri::command]
 async fn fetch_missing_metadata(
     app: tauri::AppHandle,
     state: State<'_, DbState>,
     control: State<'_, MetadataFetchControl>,
 ) -> Result<(), String> {
-    control.cancelled.store(false, Ordering::Relaxed);
+    run_metadata_fetch(app, state, control, false).await
+}
 
-    #[derive(Deserialize)]
-    struct MbTag { name: String, count: i32 }
-    #[derive(Deserialize)]
-    struct MbRecording {
-        #[serde(rename = "first-release-date")]
-        first_release_date: Option<String>,
-        tags: Option<Vec<MbTag>>,
+/// Dedicated "extract missing genres" pass: genre only (no year), and only over
+/// tracks whose genre is missing or a placeholder. Shares the progress UI, cancel,
+/// and run-guard with the full metadata fetch.
+#[tauri::command]
+async fn fetch_missing_genres(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+    control: State<'_, MetadataFetchControl>,
+) -> Result<(), String> {
+    run_metadata_fetch(app, state, control, true).await
+}
+
+async fn run_metadata_fetch(
+    app: tauri::AppHandle,
+    state: State<'_, DbState>,
+    control: State<'_, MetadataFetchControl>,
+    genres_only: bool,
+) -> Result<(), String> {
+    // Reject a second concurrent run. The UI guards this too, but make the backend
+    // authoritative so a stray double-invoke can't launch two fetches at once. The
+    // guard resets the flag on every exit path (including early `?` returns).
+    if control.running.swap(true, Ordering::SeqCst) {
+        return Err("A metadata fetch is already running".to_string());
     }
-    #[derive(Deserialize)]
-    struct MbResponse { recordings: Vec<MbRecording> }
+    struct RunningGuard<'a>(&'a AtomicBool);
+    impl Drop for RunningGuard<'_> {
+        fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); }
+    }
+    let _running_guard = RunningGuard(&control.running);
+
+    control.cancelled.store(false, Ordering::Relaxed);
 
     struct TrackChange {
         artist: String,
@@ -3795,20 +4102,35 @@ async fn fetch_missing_metadata(
         new_genre: Option<String>,
     }
 
-    // Collect tracks that are missing year or genre, along with current values
-    let tracks: Vec<(String, String, String, Option<i32>, String)> = {
+    // A track's genre is "missing" when it's empty/NULL or a placeholder like "Unknown".
+    // Kept in one place so the SELECT and is_placeholder_genre() agree.
+    const GENRE_MISSING_SQL: &str =
+        "genre IS NULL OR LOWER(TRIM(genre)) IN ('', 'unknown', 'unknown genre', '[unknown]', '<unknown>')";
+
+    // Collect candidate tracks. Genre-only mode skips tracks that are only missing a year.
+    type Row = (String, String, String, String, String, Option<i32>, String);
+    let tracks: Vec<Row> = {
         let conn = state.0.get().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare(
-            "SELECT path, title, artist, year, COALESCE(genre, '') FROM tracks
-             WHERE (year IS NULL OR year = 0 OR genre = '' OR genre IS NULL)"
-        ).map_err(|e| e.to_string())?;
-        let rows: Vec<(String, String, String, Option<i32>, String)> = stmt.query_map([], |row| {
+        let where_clause = if genres_only {
+            GENRE_MISSING_SQL.to_string()
+        } else {
+            format!("year IS NULL OR year = 0 OR {}", GENRE_MISSING_SQL)
+        };
+        let sql = format!(
+            "SELECT path, title, artist, COALESCE(album, ''), COALESCE(album_artist, ''), year, COALESCE(genre, '')
+             FROM tracks WHERE {}",
+            where_clause,
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows: Vec<Row> = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, Option<i32>>(3)?,
+                row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, Option<i32>>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })
         .map_err(|e| e.to_string())?
@@ -3830,6 +4152,12 @@ async fn fetch_missing_metadata(
     let mut not_found = 0usize;
     let mut skipped = 0usize;
     let mut changes: Vec<TrackChange> = Vec::new();
+
+    // Rate-limit clock shared by every MusicBrainz request, plus per-album caches so
+    // many tracks from the same release resolve their genre with no extra requests.
+    let mut last_req: Option<std::time::Instant> = None;
+    let mut rg_mbid_cache: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    let mut rg_genre_cache: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
 
     let write_report = |changes: &Vec<TrackChange>, updated: usize, not_found: usize, skipped: usize, cancelled: bool, total: usize| -> Option<String> {
         let log_dir = dirs::data_dir()?.join("libera");
@@ -3860,8 +4188,9 @@ async fn fetch_missing_metadata(
                     let new = c.new_year.map(|y| y.to_string()).unwrap_or_else(|| "—".into());
                     let _ = writeln!(out, "  year:  {} → {}", old, new);
                 }
-                if c.new_genre.is_some() && c.old_genre.is_empty() {
-                    let _ = writeln!(out, "  genre: — → {}", c.new_genre.as_deref().unwrap_or(""));
+                if let Some(ng) = &c.new_genre {
+                    let old = if c.old_genre.is_empty() { "—".to_string() } else { c.old_genre.clone() };
+                    let _ = writeln!(out, "  genre: {} → {}", old, ng);
                 }
             }
         }
@@ -3870,7 +4199,7 @@ async fn fetch_missing_metadata(
         log_path.to_str().map(|s| s.to_string())
     };
 
-    for (i, (path, title, artist, old_year, old_genre)) in tracks.iter().enumerate() {
+    for (i, (path, title, artist, album, album_artist, old_year, old_genre)) in tracks.iter().enumerate() {
         if control.cancelled.load(Ordering::Relaxed) {
             let log_path = write_report(&changes, updated, not_found, skipped, true, total);
             let _ = app.emit("metadata://cancelled", serde_json::json!({ "updated": updated, "log_path": log_path }));
@@ -3886,68 +4215,55 @@ async fn fetch_missing_metadata(
             || artist.eq_ignore_ascii_case("unknown artist")
         {
             skipped += 1;
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            continue;
+            continue; // no network call here — no need to rate-limit
         }
 
-        let query = format!(
-            "recording:\"{}\" AND artist:\"{}\"",
-            title.replace('"', ""),
-            artist.replace('"', ""),
-        );
-        let url = format!(
-            "https://musicbrainz.org/ws/2/recording/?query={}&limit=1&fmt=json&inc=tags",
-            urlencoding::encode(&query),
-        );
+        let year_missing = !genres_only && (old_year.is_none() || *old_year == Some(0));
+        let genre_missing = is_placeholder_genre(old_genre);
 
-        let mb_result: Option<MbRecording> = match client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<MbResponse>().await.ok()
-                    .and_then(|mut r| if r.recordings.is_empty() { None } else { Some(r.recordings.remove(0)) })
-            }
-            _ => None,
-        };
+        // Year: from the recording's first release date (skipped entirely in genre-only mode).
+        let mut new_year: Option<i32> = None;
+        if year_missing {
+            mb_pace(&mut last_req).await;
+            new_year = mb_recording_year(&client, title, artist).await;
+        }
 
-        if let Some(rec) = mb_result {
-            let new_year: Option<i32> = rec.first_release_date
-                .as_deref()
-                .and_then(|d| d.get(..4))
-                .and_then(|y| y.parse().ok());
+        // Genre: the track's release (album / release-group) genre — NOT the artist's
+        // broad genre. Cached per album, so most tracks cost no extra requests.
+        let mut new_genre: Option<String> = None;
+        if genre_missing {
+            new_genre = resolve_track_genre(
+                &client, &mut last_req, &mut rg_mbid_cache, &mut rg_genre_cache,
+                title, artist, album, album_artist,
+            ).await;
+        }
 
-            let new_genre: Option<String> = rec.tags.as_ref().and_then(|tags| {
-                tags.iter().max_by_key(|t| t.count).map(|t| t.name.clone())
+        let year_changed = new_year.is_some() && year_missing;
+        let genre_changed = new_genre.is_some() && genre_missing;
+
+        if year_changed || genre_changed {
+            // Only the changed column carries a value; the other stays NULL so COALESCE
+            // keeps existing data. This overwrites placeholder genres like "Unknown".
+            let set_year  = if year_changed  { new_year } else { None };
+            let set_genre = if genre_changed { new_genre.clone() } else { None };
+            let conn = state.0.get().map_err(|e| e.to_string())?;
+            conn.execute(
+                "UPDATE tracks SET year = COALESCE(?2, year), genre = COALESCE(?3, genre) WHERE path = ?1",
+                rusqlite::params![path, set_year, set_genre],
+            ).unwrap_or(0);
+
+            changes.push(TrackChange {
+                artist: artist.clone(),
+                title: title.clone(),
+                old_year: *old_year,
+                new_year: if year_changed { new_year } else { *old_year },
+                old_genre: old_genre.clone(),
+                new_genre: if genre_changed { new_genre } else { None },
             });
-
-            let year_changed = new_year.is_some() && (old_year.is_none() || *old_year == Some(0));
-            let genre_changed = new_genre.is_some() && old_genre.is_empty();
-
-            if year_changed || genre_changed {
-                let conn = state.0.get().map_err(|e| e.to_string())?;
-                conn.execute(
-                    "UPDATE tracks SET
-                        year  = CASE WHEN (year  IS NULL OR year  = 0)  AND ?2 IS NOT NULL THEN ?2 ELSE year  END,
-                        genre = CASE WHEN (genre IS NULL OR genre = '') AND ?3 IS NOT NULL THEN ?3 ELSE genre END
-                     WHERE path = ?1",
-                    rusqlite::params![path, new_year, new_genre],
-                ).unwrap_or(0);
-
-                changes.push(TrackChange {
-                    artist: artist.clone(),
-                    title: title.clone(),
-                    old_year: *old_year,
-                    new_year: if year_changed { new_year } else { *old_year },
-                    old_genre: old_genre.clone(),
-                    new_genre: if genre_changed { new_genre } else { None },
-                });
-                updated += 1;
-            } else {
-                not_found += 1;
-            }
+            updated += 1;
         } else {
             not_found += 1;
         }
-
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     }
 
     let log_path = write_report(&changes, updated, not_found, skipped, false, total);
@@ -5993,6 +6309,8 @@ pub fn run() {
             get_tracks_ordered,
             get_tracks_count,
             get_tracks_page,
+            get_track_paths_ordered,
+            get_tracks_by_paths,
             pick_folder,
             scan_books,
             save_books,
@@ -6019,6 +6337,7 @@ pub fn run() {
             get_genre_pair_artists,
             get_artist_link_tracks,
             rewrite_genre_tag,
+            remove_track,
             clear_music_library,
             clear_books_library,
             clear_artwork_cache,
@@ -6058,6 +6377,7 @@ pub fn run() {
             read_text_file,
             write_text_file,
             fetch_missing_metadata,
+            fetch_missing_genres,
             cancel_metadata_fetch,
             open_path_with_shell,
             reveal_in_explorer,

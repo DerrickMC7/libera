@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { usePlayerStore } from "../store/playerStore";
 import { useSettingsStore } from "../store/settingsStore";
+import { hydrateQueueWindow } from "../lib/queueHydration";
+import { setSharedAnalyser } from "../audio/analyserBus";
 
 // Dual-audio crossfade architecture
 // Two <audio> elements (A and B) alternate as current/next.
@@ -122,6 +124,7 @@ export function useAudioPlayer() {
       filtersRef.current    = [];
       compRef.current       = null;
       analyserRef.current   = null;
+      setSharedAnalyser(null);
       rgGainRef.current     = null;
       masterGainRef.current = null;
       activeSlot.current    = "A";
@@ -364,6 +367,7 @@ export function useAudioPlayer() {
     analyser.smoothingTimeConstant = 0.8;
     comp.connect(analyser);
     analyserRef.current = analyser;
+    setSharedAnalyser(analyser);
 
     // User volume lives here as a GainNode so changes can be ramped
     // (setTargetAtTime) instead of the stepped jumps HTMLMediaElement.volume
@@ -385,6 +389,16 @@ export function useAudioPlayer() {
     eb.forEach((b, i) => { if (filters[i]) filters[i].gain.value = eqEnabled ? b.gain : 0; });
     if (normalizeVolume) { comp.threshold.value = -24; comp.knee.value = 30; comp.ratio.value = 12; }
   }
+
+  // ─── Lazy queue hydration ───────────────────────────────────────────────────
+  // As the current track changes, fill in display metadata for a window of nearby
+  // queue entries (no-op unless the queue has lazy placeholders, i.e. the library
+  // "play all" queue). Lives here because this hook is always mounted, so hydration
+  // continues even when the library view that built the queue is unmounted.
+  useEffect(() => {
+    if (!currentTrack) return;
+    void hydrateQueueWindow();
+  }, [currentTrack]);
 
   // ─── Track change ─────────────────────────────────────────────────────────
   // Skip src update only when the crossfade already pre-loaded this exact path.

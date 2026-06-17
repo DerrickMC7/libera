@@ -1,11 +1,10 @@
 import { useEffect } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { Shell } from "./components/organisms/Shell";
 import { AudioPlayer } from "./components/organisms/AudioPlayer";
 import { TrackContextMenu } from "./components/organisms/TrackContextMenu";
 import { useSettingsStore, AccentColor } from "./store/settingsStore";
-
-const queryClient = new QueryClient();
+import { queryClient } from "./lib/queryClient";
 
 type PresetColor = Exclude<AccentColor, "custom">;
 const ACCENT_MAP: Record<PresetColor, { base: string; hover: string; rgb: string }> = {

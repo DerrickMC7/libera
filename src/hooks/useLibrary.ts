@@ -88,6 +88,7 @@ export function useScanFolder() {
         "tracks-page",
         "tracks-count",
         "tracks-ordered",
+        "track-paths-ordered",
         "albums",
         "artists",
         "genres",
