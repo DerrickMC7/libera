@@ -32,9 +32,20 @@ export function AudioPlayer() {
   const { progress, duration, seek, previous, next, analyserRef } = useAudioPlayer();
   const {
     currentTrack, isPlaying, volume, isMuted, shuffle, repeat, manualQueuePaths,
+    transitionActive,
     setIsPlaying, setVolume, toggleMute,
     toggleShuffle, toggleRepeat, closePlayer,
   } = usePlayerStore();
+
+  // Turning shuffle ON while a genre-map path transition is playing scrambles its
+  // deliberate genre-by-genre order — confirm before doing that.
+  const handleShuffle = () => {
+    if (transitionActive && !shuffle &&
+        !window.confirm("Shuffle will scramble your genre transition into a random order. Continue?")) {
+      return;
+    }
+    toggleShuffle();
+  };
   const { message: toastMessage, visible: toastVisible } = useToastStore();
   const showContextMenu = useContextMenuStore((s) => s.show);
 
@@ -318,7 +329,7 @@ export function AudioPlayer() {
           {/* Controls */}
           <div className="flex flex-col items-center flex-1 gap-2">
             <div className="flex items-center gap-5">
-              <ShuffleButton active={shuffle} onClick={toggleShuffle} />
+              <ShuffleButton active={shuffle} onClick={handleShuffle} />
               <SkipButton direction="previous" onClick={previous} />
               <Tooltip label="Play / Pause" shortcut={fmtKey(keyBindings["play-pause"])} altShortcut={keyBindings2["play-pause"] ? fmtKey(keyBindings2["play-pause"]) : undefined}>
                 <PlayButton isPlaying={isPlaying} onClick={() => setIsPlaying(!isPlaying)} />

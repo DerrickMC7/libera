@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { bumpArtworkEpoch } from "../hooks/useArtwork";
 import { useSettingsStore, SHORTCUT_IDS, SHORTCUT_LABELS, DEFAULT_KEY_BINDINGS, DEFAULT_KEY_BINDINGS_2, ShortcutId } from "../store/settingsStore";
 import { Equalizer } from "../components/organisms/Equalizer";
 import { Tooltip } from "../components/atoms/Tooltip";
@@ -201,6 +202,7 @@ export function SettingsPage() {
         }
         if (type === "all") {
           await invoke("clear_artwork_cache");
+          bumpArtworkEpoch();
           queryClient.invalidateQueries({ queryKey: ["artwork"] });
           queryClient.invalidateQueries({ queryKey: ["artist-image"] });
           queryClient.invalidateQueries({ queryKey: ["artist-banner"] });
@@ -324,7 +326,8 @@ export function SettingsPage() {
                 <div className="min-w-0">
                   <p className="text-sm text-[#f0ead8]">Fetch missing metadata</p>
                   <p className="text-xs text-[#3a3628] mt-0.5">
-                    Look up missing year and genre from MusicBrainz for tracks that don't have them
+                    Look up missing data from MusicBrainz. <span className="text-[#7a7060]">Fetch</span> fills year + genre;{" "}
+                    <span className="text-[#7a7060]">Genres only</span> fills just missing genres (from each track's release — faster).
                   </p>
                 </div>
                 <div className="shrink-0 flex items-center gap-2">
@@ -336,6 +339,13 @@ export function SettingsPage() {
                       Cancel
                     </button>
                   )}
+                  <button
+                    onClick={metadataFetch.startGenres}
+                    disabled={metadataFetch.isRunning}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-[#2a2820] text-[#c8bfa8] font-mono hover:bg-[#3a3628] transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-center"
+                  >
+                    Genres only
+                  </button>
                   <button
                     onClick={metadataFetch.start}
                     disabled={metadataFetch.isRunning}

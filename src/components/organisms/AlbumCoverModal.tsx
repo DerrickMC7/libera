@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
+import { bumpArtworkEpoch } from "../../hooks/useArtwork";
 import { useQueryClient } from "@tanstack/react-query";
 import { Album } from "../../types/album";
 
@@ -110,6 +111,7 @@ export function AlbumCoverModal({ album, onClose }: Props) {
           imageBase64: base64,
           applyToAlbum: true,
         });
+        bumpArtworkEpoch();
         queryClient.resetQueries({ queryKey: ["artwork"] });
         queryClient.resetQueries({ queryKey: ["artwork-original"] });
         onClose();

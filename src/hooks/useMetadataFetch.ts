@@ -1,92 +1,56 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMetadataFetchStore, ensureMetadataFetchListeners } from "../store/metadataFetchStore";
 
 const IS_DEMO = !("__TAURI_INTERNALS__" in window);
 
-interface MetadataFetchState {
-  isRunning: boolean;
-  completed: number;
-  total: number;
-  updated: number;
-  current: string;
-  doneMessage: string | null;
-  logPath: string | null;
-}
-
-const IDLE: MetadataFetchState = {
-  isRunning: false,
-  completed: 0,
-  total: 0,
-  updated: 0,
-  current: "",
-  doneMessage: null,
-  logPath: null,
-};
-
 export function useMetadataFetch() {
-  const [state, setState] = useState<MetadataFetchState>(IDLE);
-  const queryClient = useQueryClient();
+  const state = useMetadataFetchStore();
 
-  useEffect(() => {
-    if (IS_DEMO) return;
-    const unlistens: Array<() => void> = [];
+  // Listeners live for the app's lifetime (set up once), so progress keeps updating
+  // while this hook is unmounted and is still correct when Settings is reopened.
+  useEffect(() => { ensureMetadataFetchListeners(); }, []);
 
-    listen<{ total: number }>("metadata://started", (e) => {
-      setState({ isRunning: true, completed: 0, total: e.payload.total, updated: 0, current: "", doneMessage: null, logPath: null });
-    }).then((u) => unlistens.push(u));
-
-    listen<{ completed: number; total: number; current: string; updated: number }>(
-      "metadata://progress",
-      (e) => setState((s) => ({ ...s, completed: e.payload.completed, current: e.payload.current, updated: e.payload.updated })),
-    ).then((u) => unlistens.push(u));
-
-    listen<{ total: number; updated: number; log_path: string | null }>("metadata://done", (e) => {
-      setState({ ...IDLE, doneMessage: `Updated ${e.payload.updated} of ${e.payload.total} tracks`, logPath: e.payload.log_path });
-      queryClient.invalidateQueries({ queryKey: ["tracks-page"] });
-      queryClient.invalidateQueries({ queryKey: ["albums"] });
-    }).then((u) => unlistens.push(u));
-
-    listen<{ updated: number; log_path: string | null }>("metadata://cancelled", (e) => {
-      setState((s) => ({
-        ...IDLE,
-        doneMessage: e.payload.updated > 0 ? `Cancelled — updated ${e.payload.updated} tracks` : "Cancelled",
-        logPath: e.payload.log_path,
-      }));
-    }).then((u) => unlistens.push(u));
-
-    return () => unlistens.forEach((u) => u());
-  }, []);
-
-  async function start() {
-    if (IS_DEMO || state.isRunning) return;
-    setState({ ...IDLE, isRunning: true });
+  async function run(command: "fetch_missing_metadata" | "fetch_missing_genres") {
+    if (IS_DEMO || useMetadataFetchStore.getState().isRunning) return;
+    useMetadataFetchStore.setState({
+      isRunning: true, completed: 0, total: 0, updated: 0, current: "", doneMessage: null, logPath: null,
+    });
     try {
-      await invoke("fetch_missing_metadata");
+      await invoke(command);
     } catch (e) {
-      console.error("fetch_missing_metadata failed:", e);
-      setState({ ...IDLE, doneMessage: "Failed — check your connection" });
+      console.error(`${command} failed:`, e);
+      // The backend rejects a duplicate run; in that case keep showing the live
+      // progress of the run that's already going rather than flashing an error.
+      if (!/already running/i.test(String(e))) {
+        useMetadataFetchStore.setState({ isRunning: false, doneMessage: "Failed — check your connection" });
+      }
     }
   }
 
+  // Full pass: fills missing year + genre. Genre-only pass: just genres, and only
+  // over tracks whose genre is missing — faster, and won't touch years.
+  const start = () => run("fetch_missing_metadata");
+  const startGenres = () => run("fetch_missing_genres");
+
   async function cancel() {
-    if (!state.isRunning) return;
+    if (!useMetadataFetchStore.getState().isRunning) return;
     await invoke("cancel_metadata_fetch").catch(console.error);
   }
 
   async function openReport() {
-    if (!state.logPath) return;
+    const { logPath } = useMetadataFetchStore.getState();
+    if (!logPath) return;
     try {
-      await openPath(state.logPath);
+      await openPath(logPath);
     } catch (e) {
       console.error("openPath failed, falling back to shell open:", e);
-      await invoke("open_path_with_shell", { path: state.logPath }).catch(console.error);
+      await invoke("open_path_with_shell", { path: logPath }).catch(console.error);
     }
   }
 
   const percent = state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0;
 
-  return { ...state, percent, start, cancel, openReport };
+  return { ...state, percent, start, startGenres, cancel, openReport };
 }

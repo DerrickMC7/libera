@@ -20,4 +20,8 @@ export interface Track {
   replay_gain_track: number | null;
   replay_gain_album: number | null;
   artwork_path?: string | null;
+  // True for a placeholder queue entry that only has `path` set (used by the lazy
+  // library queue). Playback needs only the path; display metadata is hydrated in
+  // the background via get_tracks_by_paths, which clears this flag.
+  lazy?: boolean;
 }

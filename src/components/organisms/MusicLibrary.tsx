@@ -13,6 +13,7 @@ import { ArtistGrid } from "./ArtistGrid";
 import { GenreList } from "./GenreList";
 import { PlaylistList } from "./PlaylistList";
 import { PlaylistView } from "./PlaylistView";
+import { hydrateQueueWindow } from "../../lib/queueHydration";
 import { useNavigationStore, registerMusicViewSetter, syncMusicView } from "../../store/navigationStore";
 import { useSettingsStore } from "../../store/settingsStore";
 import { Tooltip } from "../atoms/Tooltip";
@@ -131,6 +132,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
       loadingRef.current.clear();
       activeLoadsRef.current = 0;
       queryClient.invalidateQueries({ queryKey: ["tracks-ordered"] });
+      queryClient.invalidateQueries({ queryKey: ["track-paths-ordered"] });
       forceUpdate();
     };
     window.addEventListener("library:track-updated", handler);
@@ -220,30 +222,49 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
     loadVisiblePages();
   }, [tick]);
 
+  // Queue the WHOLE library in the current sort order — not just the pages cached in
+  // memory (which can be discontinuous after eviction). In the real app we fetch only
+  // the ordered PATHS (cheap) and let the queue hydrate metadata lazily; the demo's
+  // invoke shim has no path-only command, so it keeps the full-fetch path.
   async function handlePlay(index: number) {
     const clicked = getTrack(index);
     if (!clicked) return;
-    // Queue the WHOLE library in the current sort order — not just the pages
-    // currently cached in memory (which can be discontinuous after eviction).
-    try {
-      const all = await queryClient.fetchQuery({
-        queryKey: ["tracks-ordered", debouncedSearch, trackSortBy],
-        queryFn: () =>
-          invoke<Track[]>("get_tracks_ordered", {
-            query: debouncedSearch,
-            sortBy: trackSortBy,
-          }),
-        staleTime: 1000 * 60 * 5,
-      });
-      const startIdx = all.findIndex((t) => t.path === clicked.path);
-      setQueue(all, startIdx >= 0 ? startIdx : 0);
-    } catch {
-      // Fall back to the loaded pages if the ordered fetch fails
+
+    const fallbackToLoadedPages = () => {
       const allLoaded: Track[] = [];
       Array.from(pagesRef.current.entries())
         .sort(([a], [b]) => a - b)
         .forEach(([, tracks]) => allLoaded.push(...tracks));
       setQueue(allLoaded, allLoaded.indexOf(clicked));
+    };
+
+    try {
+      if (IS_DEMO) {
+        const all = await queryClient.fetchQuery({
+          queryKey: ["tracks-ordered", debouncedSearch, trackSortBy],
+          queryFn: () =>
+            invoke<Track[]>("get_tracks_ordered", { query: debouncedSearch, sortBy: trackSortBy }),
+          staleTime: 1000 * 60 * 5,
+        });
+        const startIdx = all.findIndex((t) => t.path === clicked.path);
+        setQueue(all, startIdx >= 0 ? startIdx : 0);
+      } else {
+        const paths = await queryClient.fetchQuery({
+          queryKey: ["track-paths-ordered", debouncedSearch, trackSortBy],
+          queryFn: () =>
+            invoke<string[]>("get_track_paths_ordered", { query: debouncedSearch, sortBy: trackSortBy }),
+          staleTime: 1000 * 60 * 5,
+        });
+        const startIdx = paths.indexOf(clicked.path);
+        if (startIdx < 0) {
+          fallbackToLoadedPages(); // clicked track not in the ordered list (rare) — be safe
+        } else {
+          usePlayerStore.getState().setQueueLazy(paths, startIdx, clicked);
+          void hydrateQueueWindow(); // fill in nearby metadata for the queue panel
+        }
+      }
+    } catch {
+      fallbackToLoadedPages();
     }
     setIsPlaying(true);
   }

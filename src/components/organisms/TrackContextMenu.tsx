@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
+import { bumpArtworkEpoch } from "../../hooks/useArtwork";
 import { useContextMenuStore } from "../../store/contextMenuStore";
 import { usePlayerStore } from "../../store/playerStore";
 import { useToastStore } from "../../store/toastStore";
@@ -191,14 +192,21 @@ function ContextMenuPanel({
     setDeleting(true);
     try {
       await invoke("remove_track", { path: track.path });
-      queryClient.invalidateQueries({ queryKey: ["tracks-page"] });
-      queryClient.invalidateQueries({ queryKey: ["tracks-count"] });
-      queryClient.invalidateQueries({ queryKey: ["albums"] });
-      queryClient.invalidateQueries({ queryKey: ["artists"] });
+      // Drop it from the play queue too (handles multiple copies + the now-playing case).
+      usePlayerStore.getState().removeTrackEverywhere(track.path);
+      // Refresh every view derived from the tracks table.
+      [
+        "tracks-page", "tracks-count", "tracks-ordered", "track-paths-ordered",
+        "albums", "artists", "genres", "genre-stats", "library-stats",
+        "album-tracks",
+      ].forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
+      // Clear MusicLibrary's in-memory page cache (a plain ref that invalidation
+      // alone won't touch) so the removed row actually drops from the list.
+      window.dispatchEvent(new CustomEvent("library:track-updated"));
       showToast(`Removed — ${track.title}`);
       hide();
-    } catch {
-      showToast("Remove not available yet");
+    } catch (e) {
+      showToast("Couldn't remove — " + String(e).slice(0, 60));
       setDeleting(false);
       setDeleteStep(false);
     }
@@ -613,6 +621,7 @@ function CoverModal({ track, onClose }: { track: Track; onClose: () => void }) {
           imageBase64: base64,
           applyToAlbum: applyTo === "album",
         });
+        bumpArtworkEpoch();
         queryClient.resetQueries({ queryKey: ["artwork"] });
         queryClient.resetQueries({ queryKey: ["artwork-original"] });
         onClose();

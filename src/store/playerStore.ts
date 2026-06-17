@@ -37,12 +37,18 @@ interface PlayerState {
   repeat: RepeatMode;
   shuffledQueue: Track[];
   manualQueuePaths: string[];
+  // True while the queue is an ordered genre-map "path transition" (one song per genre,
+  // in order). Lets the UI warn before shuffle scrambles it, and keep the path tab in
+  // sync. Cleared whenever a normal queue replaces it.
+  transitionActive: boolean;
   // Actions
   setCurrentTrack: (track: Track) => void;
   setIsPlaying: (playing: boolean) => void;
   setVolume: (volume: number) => void;
   toggleMute: () => void;
   setQueue: (tracks: Track[], startIndex: number) => void;
+  setQueueLazy: (paths: string[], startIndex: number, seed: Track) => void;
+  hydrateTracks: (tracks: Track[]) => void;
   nextTrack: () => void;
   previousTrack: () => void;
   toggleShuffle: () => void;
@@ -52,6 +58,7 @@ interface PlayerState {
   playNext: (track: Track) => void;
   addToQueue: (track: Track) => void;
   removeFromQueue: (absIdx: number) => void;
+  removeTrackEverywhere: (path: string) => void;
   reorderQueue: (fromAbsIdx: number, toAbsIdx: number) => void;
   closePlayer: () => void;
 }
@@ -63,6 +70,18 @@ function shuffleArray<T>(arr: T[]): T[] {
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
+}
+
+// A path-only placeholder for the lazy library queue. Has every Track field so it
+// satisfies the type and renders safely (blank metadata) until hydrated; `lazy` marks
+// it for hydration. Playback only ever reads `path`, so a placeholder plays fine.
+function placeholderTrack(path: string): Track {
+  return {
+    path, title: "", artist: "", album: "", album_artist: "", genre: "",
+    year: null, track_number: null, track_total: null, disc_number: null, disc_total: null,
+    duration_secs: 0, bitrate: null, sample_rate: null, channels: null, file_size: 0,
+    mbid: null, replay_gain_track: null, replay_gain_album: null, lazy: true,
+  };
 }
 
 function removeFirstOccurrence(arr: string[], value: string): string[] {
@@ -141,12 +160,13 @@ export const usePlayerStore = create<PlayerState>()(
   repeat: "off",
   shuffledQueue: [],
   manualQueuePaths: [],
+  transitionActive: false,
 
   setCurrentTrack: (track) => set({ currentTrack: track }),
   setIsPlaying: (playing) => set({ isPlaying: playing }),
   setVolume: (volume) => set({ volume }),
   toggleMute: () => set((s) => ({ isMuted: !s.isMuted })),
-  closePlayer: () => set({ currentTrack: null, isPlaying: false, queue: [], shuffledQueue: [], queueIndex: 0, manualQueuePaths: [] }),
+  closePlayer: () => set({ currentTrack: null, isPlaying: false, queue: [], shuffledQueue: [], queueIndex: 0, manualQueuePaths: [], transitionActive: false }),
 
   setQueue: (tracks, startIndex) => {
     const { shuffle } = get();
@@ -165,7 +185,56 @@ export const usePlayerStore = create<PlayerState>()(
       queueIndex: startIndex,
       currentTrack: tracks[startIndex] ?? null,
       manualQueuePaths: [],
+      transitionActive: false,
     });
+  },
+
+  // Like setQueue, but the queue is built from an ordered path list (the whole
+  // library) without paying to serialize every track's metadata. The clicked
+  // `seed` is placed (fully hydrated) at startIndex; all other slots are path-only
+  // placeholders that hydrate lazily. Mirrors setQueue's shuffle handling.
+  setQueueLazy: (paths, startIndex, seed) => {
+    const { shuffle } = get();
+    const full: Track[] = paths.map((p, i) => (i === startIndex ? seed : placeholderTrack(p)));
+    let shuffled: Track[];
+    if (shuffle) {
+      const before = full.slice(0, startIndex + 1);
+      const after  = shuffleArray(full.slice(startIndex + 1));
+      shuffled = [...before, ...after];
+    } else {
+      shuffled = full;
+    }
+    set({
+      queue: full,
+      shuffledQueue: shuffled,
+      queueIndex: startIndex,
+      currentTrack: full[startIndex] ?? seed,
+      manualQueuePaths: [],
+      transitionActive: false,
+    });
+  },
+
+  // Replace path-only placeholders with their hydrated metadata, in place, across
+  // the queue / shuffled queue / current track. No-op for already-hydrated entries,
+  // and returns the same references when nothing changed so subscribers don't re-render.
+  hydrateTracks: (tracks) => {
+    if (tracks.length === 0) return;
+    const map = new Map(tracks.map((t) => [t.path, t]));
+    const patch = (arr: Track[]): Track[] => {
+      let changed = false;
+      const next = arr.map((t) => {
+        if (t.lazy) { const h = map.get(t.path); if (h) { changed = true; return h; } }
+        return t;
+      });
+      return changed ? next : arr;
+    };
+    const { queue, shuffledQueue, currentTrack } = get();
+    const newQueue = patch(queue);
+    // shuffledQueue shares the queue reference when shuffle is off — patch once.
+    const newShuffled = shuffledQueue === queue ? newQueue : patch(shuffledQueue);
+    const newCurrent = currentTrack?.lazy ? (map.get(currentTrack.path) ?? currentTrack) : currentTrack;
+    if (newQueue === queue && newShuffled === shuffledQueue && newCurrent === currentTrack) return;
+    set({ queue: newQueue, shuffledQueue: newShuffled, currentTrack: newCurrent });
   },
 
   nextTrack: () => {
@@ -216,14 +285,21 @@ export const usePlayerStore = create<PlayerState>()(
   },
 
   toggleShuffle: () => {
-    const { shuffle, queue, queueIndex, manualQueuePaths } = get();
+    const { shuffle, queue, queueIndex, manualQueuePaths, currentTrack } = get();
     const newShuffle = !shuffle;
-    set({
-      shuffle: newShuffle,
-      shuffledQueue: newShuffle
-        ? smartShuffle(queue, queueIndex, manualQueuePaths)
-        : queue,
-    });
+    const newShuffled = newShuffle
+      ? smartShuffle(queue, queueIndex, manualQueuePaths)
+      : queue;
+    // The active queue changes (queue ↔ shuffledQueue), so realign queueIndex to where
+    // the current track actually sits in the new active order — otherwise the "now
+    // playing" marker and next/prev drift off the real track (visible in the queue tab).
+    const newActive = newShuffle ? newShuffled : queue;
+    let newIndex = queueIndex;
+    if (currentTrack) {
+      const i = newActive.findIndex((t) => t.path === currentTrack.path);
+      if (i >= 0) newIndex = i;
+    }
+    set({ shuffle: newShuffle, shuffledQueue: newShuffled, queueIndex: newIndex });
   },
 
   toggleRepeat: () => {
@@ -331,6 +407,60 @@ export const usePlayerStore = create<PlayerState>()(
       queue: newQueue,
       shuffledQueue: newShuffled,
       manualQueuePaths: removeFirstOccurrence(manualQueuePaths, trackPath),
+    });
+  },
+
+  // Remove every copy of `path` from the queue (both orders) and the manual list —
+  // used when a track is removed from the library. If the removed track is currently
+  // playing, advance to the track that followed it; if it was the last one, settle on
+  // the new last track and pause; if the queue becomes empty, stop.
+  removeTrackEverywhere: (path: string) => {
+    const { queue, shuffledQueue, shuffle, queueIndex, currentTrack, manualQueuePaths } = get();
+    const active = shuffle ? shuffledQueue : queue;
+    const newManual = manualQueuePaths.filter((p) => p !== path);
+    if (!active.some((t) => t.path === path)) {
+      if (newManual.length !== manualQueuePaths.length) set({ manualQueuePaths: newManual });
+      return;
+    }
+
+    const newActive = active.filter((t) => t.path !== path);
+    if (newActive.length === 0) {
+      set({ queue: [], shuffledQueue: [], queueIndex: 0, currentTrack: null, isPlaying: false, manualQueuePaths: [] });
+      return;
+    }
+
+    // How many removed copies sat before the current index — the index shifts left by that much.
+    let removedBefore = 0;
+    for (let i = 0; i < queueIndex && i < active.length; i++) {
+      if (active[i].path === path) removedBefore++;
+    }
+    const followerIdx = queueIndex - removedBefore; // post-removal slot of the track after current
+
+    const wasCurrent = currentTrack?.path === path;
+    let newIndex: number;
+    let stop = false;
+    if (wasCurrent) {
+      if (followerIdx <= newActive.length - 1) {
+        newIndex = followerIdx;            // advance to the next track
+      } else {
+        newIndex = newActive.length - 1;   // current was the last → settle on new last, paused
+        stop = true;
+      }
+    } else {
+      newIndex = Math.min(Math.max(0, followerIdx), newActive.length - 1); // keep current in place
+    }
+    const newCurrent = wasCurrent ? newActive[newIndex] : currentTrack;
+
+    const newQueue = shuffle ? queue.filter((t) => t.path !== path) : newActive;
+    const newShuffled = shuffle ? newActive : newQueue;
+
+    set({
+      queue: newQueue,
+      shuffledQueue: newShuffled,
+      queueIndex: newIndex,
+      currentTrack: newCurrent,
+      manualQueuePaths: newManual,
+      ...(stop ? { isPlaying: false } : {}),
     });
   },
 
