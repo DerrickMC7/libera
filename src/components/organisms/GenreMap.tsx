@@ -12,7 +12,9 @@ import { useRecentlyPlayedStore } from "../../store/recentlyPlayedStore";
 import { useToastStore } from "../../store/toastStore";
 import { useCreatePlaylist, useAddToPlaylist } from "../../hooks/usePlaylist";
 import { useGenreMapStore, GenreAlias } from "../../store/genreMapStore";
+import { useSettingsStore } from "../../store/settingsStore";
 import { getSharedAnalyser } from "../../audio/analyserBus";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import { Track } from "../../types/track";
 import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import {
@@ -448,8 +450,8 @@ function tickPhysics(sim: Sim) {
 // peaks AND valleys — like a cog with soft teeth). The `rot` phase travels the scallops
 // around the ring. Points are stitched with quadratic curves through edge midpoints so
 // the outline stays smooth and petal-like rather than faceted.
-function scallopPath(R: number, rot: number, amp: number, lobes: number): string {
-  const N = Math.max(96, lobes * 10);
+function scallopPath(R: number, rot: number, amp: number, lobes: number, steps?: number): string {
+  const N = steps ?? Math.max(96, lobes * 10);
   const pts: [number, number][] = [];
   for (let i = 0; i < N; i++) {
     const a = (i / N) * Math.PI * 2;
@@ -476,12 +478,15 @@ const PULSE_LOBES = 12;
 // re-render), reading the node's live position each frame. Two slots (current + outgoing)
 // crossfade so switching tracks dissolves one node into the next. The loop sleeps when
 // nothing is playing and is woken on play/track-change, and it honours reduced-motion.
-function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
+function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale, transform, size, fps }: {
   simRef: { current: Sim | null };
   nodeId: string | null;
   playing: boolean;
   sizeMetric: SizeMetric;
   scale: number;
+  transform: { x: number; y: number; k: number };
+  size: { w: number; h: number };
+  fps: number;
 }) {
   const gRef = useRef<SVGGElement>(null);
   const gCur = useRef<SVGGElement>(null);
@@ -499,6 +504,11 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
   const playingRef = useRef(playing); playingRef.current = playing;
   const metricRef = useRef(sizeMetric); metricRef.current = sizeMetric;
   const scaleRef = useRef(scale); scaleRef.current = scale;
+  const transformRef = useRef(transform); transformRef.current = transform;
+  const sizeRef = useRef(size); sizeRef.current = size;
+  const isMobile = useIsMobile();
+  const mobileRef = useRef(isMobile); mobileRef.current = isMobile;
+  const fpsRef = useRef(fps); fpsRef.current = fps;
   const reduceRef = useRef(false);
   const wakeRef = useRef<(() => void) | null>(null);
 
@@ -515,7 +525,7 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
     let raf = 0;
     let running = false;
     const t0 = performance.now();
-    let lastNow = 0;
+    let lastFrame = 0;
     // Two crossfade slots: `cur` fades in to the playing node, `out` fades the previous
     // one away. env/outEnv are linear 0..1 envelopes (~1s each).
     let curId: string | null = null, env = 0;
@@ -531,8 +541,19 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
     const loop = (now: number) => {
       const g = gRef.current;
       if (!g) { running = false; raf = 0; return; }
-      const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
-      lastNow = now;
+      const mobile = mobileRef.current;
+
+      // ── Frame throttle (whole loop) ───────────────────────────────────────────────
+      // Cap the ENTIRE loop — envelope bookkeeping, beat analysis, scallop tessellation and
+      // DOM writes — to the configured fps (Settings → Performance: 24/30/60/120/240). The
+      // rAF keeps firing at the panel's refresh rate, but we early-out cheaply until a frame
+      // is due, so on a 240Hz display with the cap at 60 the loop does ~4× less work. It's an
+      // upper bound: the refresh rate still limits actual repaints (240 on a 60Hz panel just
+      // means "every frame"). A breathing aura doesn't need more than ~60.
+      const frameInterval = 1000 / Math.max(1, fpsRef.current);
+      if (lastFrame && now - lastFrame < frameInterval) { raf = requestAnimationFrame(loop); return; }
+      const dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 0;
+      lastFrame = now;
       const reduce = reduceRef.current;
 
       const id = nodeIdRef.current;
@@ -564,8 +585,32 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
         beat = 0; bassPrev = 0; fluxPeak = 0.01;
         running = false; raf = 0; return;
       }
+      // ── Visibility cull ───────────────────────────────────────────────────────────
+      // Chromium stops *painting* the pulse when it scrolls off-screen (GPU drops to idle)
+      // but it can't cull the rAF JS — so without this the scallop maths + DOM writes keep
+      // burning CPU even when nothing is visible. Cull it ourselves: if neither the current
+      // nor the outgoing node falls within the viewport (plus a generous margin for the
+      // auras/ripples that extend well past the node), hide the group and skip all geometry
+      // work this frame. The lightweight envelope bookkeeping above still runs, so the pulse
+      // is in the right state the instant it pans back into view.
+      const tf = transformRef.current, sz = sizeRef.current;
+      const onScreen = (node: SimNode | null): boolean => {
+        if (!node) return false;
+        const sx = tf.x + node.x * tf.k, sy = tf.y + node.y * tf.k;
+        const m = 240;
+        return sx >= -m && sx <= sz.w + m && sy >= -m && sy <= sz.h + m;
+      };
+      if (sz.w > 0 && !onScreen(curNode) && !onScreen(outNode)) {
+        g.style.display = "none";
+        beat = 0; bassPrev = 0;
+        raf = requestAnimationFrame(loop);
+        return;
+      }
       g.style.display = "";
+
       const t = (now - t0) / 1000;
+      // Scallop point count — fewer points on phones (cheaper path tessellation/raster).
+      const detail = mobile ? 44 : 72;
 
       // ── Beat: spectral flux + auto-gain ──────────────────────────────────────────
       // We don't use raw bass loudness (that just tracks how loud the song is); we track
@@ -606,7 +651,7 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
         const col = node.active ? node.color : "#8a8270";
         const beatR = 1 + 0.10 * pump;
         if (b) {
-          b.setAttribute("d", scallopPath(R * (0.97 + 0.04 * breath) * (1 + 0.18 * pump), bodyRot, (0.07 + 0.03 * breath) * e, PULSE_LOBES));
+          b.setAttribute("d", scallopPath(R * (0.97 + 0.04 * breath) * (1 + 0.18 * pump), bodyRot, (0.07 + 0.03 * breath) * e, PULSE_LOBES, detail));
           b.style.opacity = String(vis);
           b.style.fill = col;
           // Mirror the node's own border: custom/reparented nodes keep their dashed accent.
@@ -614,8 +659,8 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
           b.style.stroke = accent ? "var(--accent)" : "rgba(255,255,255,0.28)";
           b.style.strokeDasharray = accent ? "3 2" : "none";
         }
-        if (a) { a.setAttribute("d", scallopPath(R * 1.42 * beatR, auraRot, amp * 0.7, PULSE_LOBES)); a.style.opacity = String(0.16 * vis); a.style.fill = col; }
-        if (r) { r.setAttribute("d", scallopPath(R * 1.72 * beatR, ringRot, amp, PULSE_LOBES)); r.style.opacity = String(0.55 * vis); r.style.stroke = col; }
+        if (a) { a.setAttribute("d", scallopPath(R * 1.42 * beatR, auraRot, amp * 0.7, PULSE_LOBES, detail)); a.style.opacity = String(0.16 * vis); a.style.fill = col; }
+        if (r) { r.setAttribute("d", scallopPath(R * 1.72 * beatR, ringRot, amp, PULSE_LOBES, detail)); r.style.opacity = String(0.55 * vis); r.style.stroke = col; }
         return R;
       };
 
@@ -626,7 +671,7 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
         const R = paint(bodyC.current, auraC.current, ringC.current, curNode, env, pump);
         const ripple = (el: SVGCircleElement | null, off: number) => {
           if (!el) return;
-          if (reduce) { el.style.opacity = "0"; return; } // ripples are pure motion
+          if (reduce || mobile) { el.style.opacity = "0"; return; } // ripples are pure motion; drop on phones
           const p = (t * 0.5 + off) % 1;
           el.setAttribute("r", String(R * 1.25 + p * R * 2.4));
           el.style.stroke = curNode.active ? curNode.color : "#8a8270";
@@ -650,7 +695,7 @@ function PlayingPulse({ simRef, nodeId, playing, sizeMetric, scale }: {
       raf = requestAnimationFrame(loop);
     };
 
-    const start = () => { if (!running) { running = true; lastNow = 0; raf = requestAnimationFrame(loop); } };
+    const start = () => { if (!running) { running = true; lastFrame = 0; raf = requestAnimationFrame(loop); } };
     wakeRef.current = start;
     start();
     return () => { if (raf) cancelAnimationFrame(raf); running = false; wakeRef.current = null; };
@@ -683,6 +728,7 @@ interface GenreMapProps { onBack: () => void; }
 
 export function GenreMap({ onBack }: GenreMapProps) {
   const { data: genres = [], isLoading } = useGenres("", true, "count");
+  const genreMapFps = useSettingsStore((s) => s.genreMapFps);
   const hasTrack = usePlayerStore((s) => !!s.currentTrack);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
@@ -805,12 +851,21 @@ export function GenreMap({ onBack }: GenreMapProps) {
     const sim = simRef.current;
     if (!sim || sim.running) return;
     sim.running = true;
+    // Physics keeps integrating every rAF (so settle speed/dynamics are unchanged), but the
+    // React re-render of the whole node/link SVG tree is throttled to the configured fps.
+    // Without this it reconciled hundreds of elements at the panel's full refresh (240Hz
+    // here) during every settle/drag/reheat — pure waste above ~60fps. The final settled
+    // frame always renders so nodes land in their resting positions.
+    let lastRender = 0;
     const step = () => {
       const s = simRef.current;
       if (!s || !s.running) return;
       tickPhysics(s); tickPhysics(s); tickPhysics(s);
-      forceRender();
-      if (s.alpha <= ALPHA_MIN) { s.running = false; return; }
+      const settled = s.alpha <= ALPHA_MIN;
+      const interval = 1000 / Math.max(1, useSettingsStore.getState().genreMapFps);
+      const now = performance.now();
+      if (settled || now - lastRender >= interval) { lastRender = now; forceRender(); }
+      if (settled) { s.running = false; return; }
       s.raf = requestAnimationFrame(step);
     };
     sim.raf = requestAnimationFrame(step);
@@ -1547,7 +1602,7 @@ export function GenreMap({ onBack }: GenreMapProps) {
                   return <path key={`path-${i}`} d={`M${a.x} ${a.y} Q${cx} ${cy} ${b.x} ${b.y}`} fill="none" stroke="var(--accent)" strokeWidth={2.6 / transform.k} strokeOpacity={0.9} strokeLinecap="round" />;
                 })}
 
-                <PlayingPulse simRef={simRef} nodeId={playingNodeId} playing={isPlaying} sizeMetric={sizeMetric} scale={scale} />
+                <PlayingPulse simRef={simRef} nodeId={playingNodeId} playing={isPlaying} sizeMetric={sizeMetric} scale={scale} transform={transform} size={size} fps={genreMapFps} />
 
                 {sim.nodes.map((n) => {
                   if (!nodeVisible(n)) return null;

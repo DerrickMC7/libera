@@ -131,6 +131,7 @@ interface SettingsState {
   // Advanced
   maxPagesInMemory: number;
   maxConcurrentLoads: number;
+  genreMapFps: number; // target fps for the Genre Map "now playing" pulse animation
 
   // Actions
   keyBindings: Record<ShortcutId, string>;
@@ -160,7 +161,10 @@ interface SettingsState {
   getAllPresets: () => EqPreset[];
   setMaxPagesInMemory: (v: number) => void;
   setMaxConcurrentLoads: (v: number) => void;
+  setGenreMapFps: (v: number) => void;
 }
+
+export const GENRE_MAP_FPS_OPTIONS = [24, 30, 60, 120, 240] as const;
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -178,6 +182,7 @@ export const useSettingsStore = create<SettingsState>()(
       eqEnabled: false,
       maxPagesInMemory: 6,
       maxConcurrentLoads: 2,
+      genreMapFps: 30,
       eqBands: [...DEFAULT_BANDS],
       activePresetId: "flat",
       customPresets: [],
@@ -252,6 +257,7 @@ export const useSettingsStore = create<SettingsState>()(
 
       setMaxPagesInMemory: (maxPagesInMemory) => set({ maxPagesInMemory }),
       setMaxConcurrentLoads: (maxConcurrentLoads) => set({ maxConcurrentLoads }),
+      setGenreMapFps: (genreMapFps) => set({ genreMapFps }),
     }),
     {
       name: "libera-settings",

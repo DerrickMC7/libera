@@ -21,8 +21,11 @@ interface Props {
 function StarRating({ rating, path, size = 12, interactive = false }: { rating: number; path: string; size?: number; interactive?: boolean }) {
   const [hoverRating, setHoverRating] = useState(0);
   const { mutate: setRating } = useSetPhotoRating();
-  const { ratingOverrides, setRatingOverride } = usePhotoStore();
-  const currentRating = path in ratingOverrides ? ratingOverrides[path] : rating;
+  // Per-path selector so a star widget only re-renders when ITS photo's rating changes,
+  // not when any photo's rating changes anywhere in the grid.
+  const ratingOverride = usePhotoStore((s) => s.ratingOverrides[path]);
+  const setRatingOverride = usePhotoStore((s) => s.setRatingOverride);
+  const currentRating = ratingOverride !== undefined ? ratingOverride : rating;
   const effective = interactive && hoverRating > 0 ? hoverRating : currentRating;
 
   return (
@@ -237,11 +240,19 @@ export const PhotoCard = memo(function PhotoCard({ photo, selected, onClick, onF
   // true = top-right corner of the thumbnail is light → use dark heart stroke
   const [heartOnLight, setHeartOnLight] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
-  const { selectionMode, selectedPaths, toggleSelect, startSelection, favoriteOverrides, setFavoriteOverride, ratingOverrides } = usePhotoStore();
+  // Per-path / per-field selectors: a card re-renders only when its OWN selection,
+  // favorite, or rating changes — not when any other photo in the grid changes. Action
+  // refs are stable, so they never trigger re-renders.
+  const selectionMode = usePhotoStore((s) => s.selectionMode);
+  const isSelected = usePhotoStore((s) => s.selectedPaths.has(photo.path));
+  const toggleSelect = usePhotoStore((s) => s.toggleSelect);
+  const startSelection = usePhotoStore((s) => s.startSelection);
+  const setFavoriteOverride = usePhotoStore((s) => s.setFavoriteOverride);
+  const favOverride = usePhotoStore((s) => s.favoriteOverrides[photo.path]);
+  const ratingOverride = usePhotoStore((s) => s.ratingOverrides[photo.path]);
   const { mutate: setRating } = useSetPhotoRating();
-  const isSelected = selectedPaths.has(photo.path);
-  const isFavorite = photo.path in favoriteOverrides ? favoriteOverrides[photo.path] : photo.is_favorite;
-  const iRating = photo.path in ratingOverrides ? ratingOverrides[photo.path] : photo.rating;
+  const isFavorite = favOverride !== undefined ? favOverride : photo.is_favorite;
+  const iRating = ratingOverride !== undefined ? ratingOverride : photo.rating;
   const showStars = size >= 140;
 
   const { data: thumbUrl } = usePhotoThumbnail(photo.path);

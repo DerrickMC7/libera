@@ -20,6 +20,76 @@ use zip::ZipArchive;
 
 pub struct DbState(pub Pool<SqliteConnectionManager>);
 
+/// Holds a persistent `sysinfo::System` so `get_app_metrics` can report per-process CPU
+/// usage as a delta between successive samples (sysinfo needs two refreshes spaced in
+/// time to compute CPU%). Re-using one System across calls makes each sample read the
+/// usage over the interval since the previous sample — ideal for ~1 Hz polling.
+pub struct SysState(pub std::sync::Mutex<sysinfo::System>);
+
+#[derive(Serialize)]
+pub struct AppMetrics {
+    /// Summed resident memory (bytes) of this process + every descendant (the WebView2
+    /// host, GPU and renderer processes on Windows; the WebKit helpers on macOS/Linux).
+    memory_bytes: u64,
+    /// Summed CPU usage of the whole process tree, normalised to total machine capacity
+    /// (i.e. divided by logical core count) so it reads like Task Manager's per-app %.
+    cpu_percent: f32,
+    /// Number of OS processes that make up the app (host + helpers).
+    process_count: u32,
+}
+
+/// Total memory + CPU of the whole app process tree. GPU usage is intentionally omitted:
+/// there is no portable per-process GPU API across Windows/macOS/Linux/Android/iOS, so the
+/// frontend uses achieved frame-rate as the render/GPU-load proxy instead.
+#[tauri::command]
+fn get_app_metrics(state: State<'_, SysState>) -> Result<AppMetrics, String> {
+    use sysinfo::{get_current_pid, Pid, ProcessesToUpdate};
+    let mut sys = state.0.lock().map_err(|e| e.to_string())?;
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+
+    let cur = get_current_pid().map_err(|e| e.to_string())?;
+
+    // child_pid -> looked up via each process's parent(); build a parent->children map.
+    let mut children: std::collections::HashMap<Pid, Vec<Pid>> = std::collections::HashMap::new();
+    for (pid, proc_) in sys.processes() {
+        if let Some(parent) = proc_.parent() {
+            children.entry(parent).or_default().push(*pid);
+        }
+    }
+
+    // Walk the tree from our own pid downward, summing memory + CPU.
+    let mut stack = vec![cur];
+    let mut seen = std::collections::HashSet::new();
+    let mut memory_bytes: u64 = 0;
+    let mut cpu_raw: f32 = 0.0;
+    let mut process_count: u32 = 0;
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        if let Some(p) = sys.process(pid) {
+            memory_bytes += p.memory();
+            cpu_raw += p.cpu_usage();
+            process_count += 1;
+        }
+        if let Some(kids) = children.get(&pid) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+
+    // Use the OS logical-core count (not sys.cpus(), which is empty until a CPU refresh) to
+    // normalise summed per-process CPU% down to a share of total machine capacity.
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .max(1) as f32;
+    Ok(AppMetrics {
+        memory_bytes,
+        cpu_percent: cpu_raw / cores,
+        process_count,
+    })
+}
+
 /// Limits concurrent full-image decodes to prevent OOM on large/4K photo imports.
 /// Each decode of a 4K phone JPEG uses ~48MB RAM; 2 concurrent = ~100MB peak.
 pub struct ThumbSemaphore(pub Arc<tokio::sync::Semaphore>);
@@ -1327,6 +1397,29 @@ fn get_artwork(
     } else {
         cache_base.join("thumb")
     };
+
+    // FAST PATH (no file probe): the cache filename is md5(album||album_artist), and the
+    // tracks table already holds album + album_artist (indexed). When the artwork is
+    // already cached — the common case while scrolling a large library — resolve the file
+    // straight from the DB and return, instead of opening and tag-parsing every audio file
+    // on disk just to recompute the same hash. If the DB-derived hash does NOT resolve to
+    // an existing file (artwork not cached yet, or album_artist was cleaned differently
+    // than the raw tag used when the cache was first written, e.g. "/"-collab credits), we
+    // fall through to the probe path below — which is byte-for-byte the original behaviour,
+    // so this can never resolve to the wrong image.
+    if let Ok(conn) = db.0.get() {
+        if let Ok((album, album_artist)) = conn.query_row(
+            "SELECT album, album_artist FROM tracks WHERE path = ?1",
+            rusqlite::params![&track_path],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        ) {
+            let cache_path = cache_dir.join(format!("{}.jpg", album_hash(&album, &album_artist)));
+            if cache_path.exists() {
+                return Some(cache_path.to_string_lossy().to_string());
+            }
+        }
+    }
+
     fs::create_dir_all(&cache_dir).ok()?;
 
     // Try to get album info from track metadata
@@ -6302,6 +6395,7 @@ pub fn run() {
         .manage(PreviewSemaphore(Arc::new(tokio::sync::Semaphore::new(2))))
         .manage(DownloadControl::new())
         .manage(MetadataFetchControl::new())
+        .manage(SysState(std::sync::Mutex::new(sysinfo::System::new())))
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             scan_and_save_folder,
@@ -6434,6 +6528,7 @@ pub fn run() {
             get_video_thumb,
             save_video_thumb,
             get_video_subtitles,
+            get_app_metrics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

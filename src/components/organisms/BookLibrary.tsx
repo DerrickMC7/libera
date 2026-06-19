@@ -3,8 +3,7 @@ import { useBooks, useScanBooks } from "../../hooks/useBooks";
 import { Tooltip } from "../atoms/Tooltip";
 import { Button } from "../atoms/Button";
 import { BookRow } from "../molecules/BookRow";
-import { PdfReader } from "./PdfReader/PdfReader";
-import { EpubViewer } from "./EpubViewer";
+import { LazyPdfReader, LazyEpubViewer } from "./LazyReaders";
 import { Book } from "../../types/book";
 
 const IS_DEMO = !("__TAURI_INTERNALS__" in window);
@@ -43,21 +42,11 @@ export function BookLibrary() {
   }
 
   if (selectedBook?.format === "pdf") {
-    return (
-      <PdfReader
-        book={selectedBook}
-        onClose={() => setSelectedBook(null)}
-      />
-    );
+    return <LazyPdfReader book={selectedBook} onClose={() => setSelectedBook(null)} />;
   }
 
   if (selectedBook?.format === "epub") {
-    return (
-      <EpubViewer
-        book={selectedBook}
-        onClose={() => setSelectedBook(null)}
-      />
-    );
+    return <LazyEpubViewer book={selectedBook} onClose={() => setSelectedBook(null)} />;
   }
 
   return (

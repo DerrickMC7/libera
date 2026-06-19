@@ -14,10 +14,18 @@ function fmt(secs: number) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function Thumb({ path }: { path: string }) {
-  const { data: url } = useArtwork(path, false, true);
+function Thumb({ path, defer }: { path: string; defer?: boolean }) {
+  const { data: url } = useArtwork(path, false, true, !defer);
   return url ? (
-    <img src={url} alt="" className="w-full h-full object-cover" />
+    <img
+      src={url}
+      alt=""
+      width={36}
+      height={36}
+      loading="lazy"
+      decoding="async"
+      className="w-full h-full object-cover"
+    />
   ) : (
     <div className="w-full h-full flex items-center justify-center">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="text-[#2a2820]">
@@ -60,6 +68,8 @@ export function trackRowColumns({
 export interface TrackRowProps extends TrackColConfig {
   track: Track;
   isActive?: boolean;
+  /** Defer artwork loading (e.g. while the list is actively scrolling). Cached art still shows. */
+  deferArtwork?: boolean;
   trackNumber?: number;
   playlistId?: number;
   draggable?: boolean;
@@ -75,6 +85,7 @@ export interface TrackRowProps extends TrackColConfig {
 export function TrackRow({
   track,
   isActive = false,
+  deferArtwork = false,
   showDragHandle = false,
   showTrackNumber = false,
   showArtwork = true,
@@ -95,8 +106,13 @@ export function TrackRow({
   const isMobile = useIsMobile();
   const effectiveShowArtistColumn = showArtistColumn && !isMobile;
   const effectiveShowAlbumColumn = showAlbumColumn && !isMobile;
-  const { playNext, addToQueue } = usePlayerStore();
-  const { show: showToast } = useToastStore();
+  // Select stable action refs individually so a row never re-renders on unrelated
+  // player/toast state changes (play/pause, queue index, toast text) — only on its
+  // own prop changes. With ~30 virtualised rows this avoids a re-render per row on
+  // every play/pause.
+  const playNext = usePlayerStore((s) => s.playNext);
+  const addToQueue = usePlayerStore((s) => s.addToQueue);
+  const showToast = useToastStore((s) => s.show);
   const showContextMenu = useContextMenuStore((s) => s.show);
   const navigateToAlbum = useNavigationStore((s) => s.navigateToAlbum);
 
@@ -148,7 +164,7 @@ export function TrackRow({
       {/* Artwork */}
       {showArtwork && (
         <div className="w-9 h-9 rounded-md bg-[#1a1814] overflow-hidden shrink-0">
-          <Thumb path={track.path} />
+          <Thumb path={track.path} defer={deferArtwork} />
         </div>
       )}
 
