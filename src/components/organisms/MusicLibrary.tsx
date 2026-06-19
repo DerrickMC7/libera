@@ -15,6 +15,7 @@ import { PlaylistList } from "./PlaylistList";
 import { PlaylistView } from "./PlaylistView";
 import { hydrateQueueWindow } from "../../lib/queueHydration";
 import { useNavigationStore, registerMusicViewSetter, syncMusicView } from "../../store/navigationStore";
+import { registerTracksScroller } from "../../lib/automationBus";
 import { useSettingsStore } from "../../store/settingsStore";
 import { Tooltip } from "../atoms/Tooltip";
 
@@ -66,6 +67,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   const loadingRef = useRef<Set<number>>(new Set());
   const activeLoadsRef = useRef(0);
   const isScrollingRef = useRef(false);
+  const [isScrolling, setIsScrolling] = useState(false);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [tick, setTick] = useState(0);
   const [, startTransition] = useTransition();
@@ -80,6 +82,8 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
 
   // Register setter so goBack() can drive MusicLibrary without prop drilling
   useEffect(() => { registerMusicViewSetter((v) => setView(v as View)); }, []);
+  // Expose the tracks scroll container to the benchmark automation.
+  useEffect(() => { registerTracksScroller(() => scrollRef.current); }, []);
   // Keep module-level mirror in sync
   useEffect(() => { syncMusicView(view); }, [view]);
 
@@ -270,10 +274,14 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
   }
 
   function handleScroll() {
-    isScrollingRef.current = true;
+    // Toggle the `isScrolling` flag on the edges only (not every scroll event) so artwork
+    // loading is deferred while the list is moving — a fast scroll through the whole library
+    // then loads thumbnails only for the rows it settles on, not the thousands it flew past.
+    if (!isScrollingRef.current) { isScrollingRef.current = true; setIsScrolling(true); }
     if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
     scrollTimerRef.current = setTimeout(() => {
       isScrollingRef.current = false;
+      setIsScrolling(false);
     }, 150);
     loadVisiblePages();
   }
@@ -407,6 +415,7 @@ export function MusicLibrary({ showPlayer }: { showPlayer?: boolean } = {}) {
                         <TrackRow
                           track={track}
                           isActive={currentTrack?.path === track.path}
+                          deferArtwork={isScrolling}
                           onClick={() => handlePlay(index)}
                           showArtistColumn
                           showAlbumColumn

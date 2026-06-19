@@ -333,6 +333,17 @@ export function mockInvoke<T>(command: string, args?: Record<string, unknown>): 
   const q = ((args?.query as string) || "").toLowerCase();
 
   switch (command) {
+    case "get_app_metrics": {
+      // Demo/browser mode has no Rust process tree to inspect. Fall back to the JS heap
+      // (Chromium-only) so the benchmark UI still shows *something* in `pnpm dev`.
+      const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+      return Promise.resolve({
+        memory_bytes: mem?.usedJSHeapSize ?? 0,
+        cpu_percent: 0,
+        process_count: 1,
+      } as unknown as T);
+    }
+
     case "get_tracks_count": {
       const count = q
         ? DEMO_TRACKS.filter(

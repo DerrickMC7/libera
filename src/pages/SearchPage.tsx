@@ -10,8 +10,7 @@ import { useRecentSearchStore } from "../store/recentSearchStore";
 import { useContextMenuStore } from "../store/contextMenuStore";
 import { ArtistLinks } from "../components/atoms/ArtistLinks";
 import { useLibraryStats, type LibraryStats, type StorageCategory } from "../hooks/useLibraryStats";
-import { PdfReader } from "../components/organisms/PdfReader/PdfReader";
-import { EpubViewer } from "../components/organisms/EpubViewer";
+import { LazyPdfReader, LazyEpubViewer } from "../components/organisms/LazyReaders";
 import { AlbumView } from "../components/organisms/AlbumView";
 import { ArtistView } from "../components/organisms/ArtistView";
 import { Tooltip } from "../components/atoms/Tooltip";
@@ -401,8 +400,8 @@ export function SearchPage() {
   // ─── Viewers ────────────────────────────────────────────────────────────────
   if (selectedAlbum)  return <AlbumView  album={selectedAlbum}   onBack={() => setSelectedAlbum(null)} />;
   if (selectedArtist) return <ArtistView artist={selectedArtist} onBack={() => setSelectedArtist(null)} />;
-  if (selectedBook?.format === "pdf")  return <PdfReader   book={selectedBook} onClose={() => setSelectedBook(null)} />;
-  if (selectedBook?.format === "epub") return <EpubViewer  book={selectedBook} onClose={() => setSelectedBook(null)} />;
+  if (selectedBook?.format === "pdf")  return <LazyPdfReader  book={selectedBook} onClose={() => setSelectedBook(null)} />;
+  if (selectedBook?.format === "epub") return <LazyEpubViewer book={selectedBook} onClose={() => setSelectedBook(null)} />;
 
   let navIdx = -1;
   function nextIdx() { return ++navIdx; }

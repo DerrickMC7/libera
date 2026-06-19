@@ -8,6 +8,7 @@ import { VideoLibrary } from "./VideoLibrary";
 import { SearchPage } from "../../pages/SearchPage";
 import { SettingsPage } from "../../pages/SettingsPage";
 import { CacheProgress } from "./CacheProgress";
+import { BenchmarkRecBadge } from "./BenchmarkRecBadge";
 import { useCacheStore } from "../../store/cacheStore";
 import { useNavigationStore, registerSectionSetter, syncSection } from "../../store/navigationStore";
 
@@ -82,6 +83,7 @@ export function Shell() {
           </AnimatePresence>
         </div>
       </main>
+      <BenchmarkRecBadge />
     </div>
   );
 }

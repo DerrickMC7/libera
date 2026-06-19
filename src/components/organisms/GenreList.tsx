@@ -6,6 +6,7 @@ import { usePlayerStore } from "../../store/playerStore";
 import { useNavigationStore, syncGenreName } from "../../store/navigationStore";
 import { GenreCard } from "../molecules/GenreCard";
 import { GenreMap } from "./GenreMap";
+import { registerGenreMapSetter } from "../../lib/automationBus";
 import { TrackRow, TrackRowHeader } from "../molecules/TrackRow";
 import { invoke } from "@tauri-apps/api/core";
 import { Track } from "../../types/track";
@@ -163,6 +164,12 @@ export function GenreList({ active = true, onDetailChange }: GenreListProps) {
   }, [pendingGenreName, genres]);
 
   useEffect(() => { onDetailChange?.(!!selectedGenre || showMap); }, [selectedGenre, showMap]);
+
+  // Expose the map toggle to the benchmark automation while this list is mounted.
+  useEffect(() => {
+    registerGenreMapSetter(setShowMap);
+    return () => registerGenreMapSetter(null);
+  }, []);
 
   // ResizeObserver — accurate once DOM is ready
   useEffect(() => {

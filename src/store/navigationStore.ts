@@ -19,6 +19,11 @@ let _setMusicView: ((v: string) => void) | null = null;
 export function registerSectionSetter(fn: (s: string) => void) { _setSection = fn; }
 export function registerMusicViewSetter(fn: (v: string) => void) { _setMusicView = fn; }
 
+// Imperative drivers used by the benchmark automation (and anything that needs to navigate
+// without prop drilling). No-ops if the target component isn't mounted yet.
+export function driveSection(section: string) { _setSection?.(section); }
+export function driveMusicView(view: string) { _setMusicView?.(view); }
+
 interface BackTarget {
   section: string;
   musicView: string;

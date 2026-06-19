@@ -14,7 +14,13 @@ export function bumpArtworkEpoch() {
   artworkEpoch = Date.now();
 }
 
-export function useArtwork(trackPath: string | undefined, full?: boolean, trackOverride?: boolean) {
+// `enabled` lets callers defer the fetch (e.g. while a list is actively scrolling) WITHOUT
+// hiding already-cached art: react-query still returns cached `data` for the key when
+// enabled is false, it just won't run the queryFn — so warm thumbnails stay visible during
+// a scroll while only uncached ones wait for it to settle. This stops a fast scroll through
+// a large library from decoding thousands of thumbnails it flew past (the cold-scroll
+// memory spike + jank seen in the benchmark).
+export function useArtwork(trackPath: string | undefined, full?: boolean, trackOverride?: boolean, enabled = true) {
   return useQuery({
     queryKey: ["artwork", trackPath, full ?? false, trackOverride ?? false],
     queryFn: async () => {
@@ -27,8 +33,8 @@ export function useArtwork(trackPath: string | undefined, full?: boolean, trackO
       if (!cachePath) return null;
       return `${convertFileSrc(cachePath)}?v=${artworkEpoch}`;
     },
-    enabled: !!trackPath,
+    enabled: !!trackPath && enabled,
     staleTime: Infinity,
-    gcTime: 1000 * 60 * 30,
+    gcTime: 1000 * 60 * 10,
   });
 }

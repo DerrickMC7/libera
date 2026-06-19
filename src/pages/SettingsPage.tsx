@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { bumpArtworkEpoch } from "../hooks/useArtwork";
-import { useSettingsStore, SHORTCUT_IDS, SHORTCUT_LABELS, DEFAULT_KEY_BINDINGS, DEFAULT_KEY_BINDINGS_2, ShortcutId } from "../store/settingsStore";
+import { useSettingsStore, SHORTCUT_IDS, SHORTCUT_LABELS, DEFAULT_KEY_BINDINGS, DEFAULT_KEY_BINDINGS_2, ShortcutId, GENRE_MAP_FPS_OPTIONS } from "../store/settingsStore";
 import { Equalizer } from "../components/organisms/Equalizer";
+import { BenchmarkPanel } from "../components/organisms/BenchmarkPanel";
 import { Tooltip } from "../components/atoms/Tooltip";
 import { useQueryClient } from "@tanstack/react-query";
 import { useScanFolder } from "../hooks/useLibrary";
@@ -42,7 +43,7 @@ function hexToHsv(hex: string): [number, number, number] {
   return [Math.round(h), Math.round(max ? (d / max) * 100 : 0), Math.round(max * 100)];
 }
 
-type SettingsSection = "library" | "appearance" | "player" | "equalizer" | "shortcuts" | "about";
+type SettingsSection = "library" | "appearance" | "player" | "equalizer" | "shortcuts" | "performance" | "about";
 
 
 export function SettingsPage() {
@@ -83,6 +84,7 @@ export function SettingsPage() {
     setShortcut2, resetShortcut2, resetAllShortcuts2,
     setAutoplay, setCrossfadeDuration, setNormalizeVolume,
     maxPagesInMemory, maxConcurrentLoads, setMaxPagesInMemory, setMaxConcurrentLoads,
+    genreMapFps, setGenreMapFps,
   } = useSettingsStore();
 
   const [recordingId, setRecordingId] = useState<ShortcutId | null>(null);
@@ -223,6 +225,7 @@ export function SettingsPage() {
     { id: "player", label: "Player", icon: "M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2z" },
     { id: "equalizer", label: "Equalizer", icon: "M9 19V5m0 0L5 9m4-4l4 4M15 5v14m0 0l4-4m-4 4l-4-4" },
     { id: "shortcuts", label: "Shortcuts", icon: "M12 6v6m0 0v6m0-6h6m-6 0H6" },
+    { id: "performance", label: "Performance", icon: "M13 10V3L4 14h7v7l9-11h-7z" },
     { id: "about", label: "About", icon: "M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
   ];
 
@@ -925,6 +928,50 @@ export function SettingsPage() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Performance */}
+        {activeSection === "performance" && (
+          <div className="max-w-2xl">
+            <h2 className="text-2xl text-[#faf8f2] font-light mb-1" style={{ fontFamily: "Fraunces, serif" }}>
+              Performance
+            </h2>
+            <p className="text-[#3a3628] text-xs font-mono mb-8">Animation cost &amp; resource benchmarking</p>
+
+            {/* Genre Map FPS */}
+            <div className="p-4 rounded-xl bg-[#161410] border border-white/5 mb-8">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm text-[#f0ead8]">Genre Map animation FPS</p>
+                <span className="text-xs font-mono text-[var(--accent)]">{genreMapFps} fps</span>
+              </div>
+              <p className="text-xs text-[#3a3628] mb-3 leading-relaxed">
+                Caps the repaint rate of the "now playing" pulse on the Genre Map. Lower = much less GPU/CPU
+                (and battery) for a barely-noticeable change; higher = silkier on high-refresh displays. It's an
+                upper bound — your screen's refresh rate still limits actual frames. Default: 30.
+              </p>
+              <div className="flex gap-1.5 flex-wrap">
+                {GENRE_MAP_FPS_OPTIONS.map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setGenreMapFps(f)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors ${
+                      genreMapFps === f
+                        ? "bg-[var(--accent-a20)] text-[var(--accent)] border border-[var(--accent-a30)]"
+                        : "bg-[#1f1d18] text-[#7a7060] border border-transparent hover:text-[#c8bfa8]"
+                    }`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 mb-5">
+              <span className="text-[9px] font-mono tracking-[0.18em] uppercase text-[#5a5244]">Benchmark</span>
+              <div className="flex-1 h-px bg-white/5" />
+            </div>
+            <BenchmarkPanel />
           </div>
         )}
 
